@@ -1,13 +1,69 @@
 export const site = {
   origin: 'https://dsha.cc', // version / versionCode 由实际 APK 清单注入。
-  dsh: '0.1.6-alpha.2', checkedAt: '2026-09-18',
+  dsh: '0.1.7-rc.2', checkedAt: '2026-09-28',
   repository: 'https://github.com/DSH-APP/DSHA',
   group: '975836806'
 };
 
 export const entries = [
 {
+  "id": "dsh-peak-chip",
+  "name": "峰谷指示灯",
+  "packageName": "dsh-peak-chip",
+  "kind": "plugin",
+  "category": "workflow",
+  "icon": "scan",
+  "version": "4.1.8",
+  "summary": "在会话中查看 DeepSeek 余额、本日消耗估算与误差提示。",
+  "description": "会话顶部提供峰谷指示灯与余额面板，结合官方余额变化和本地 token 统计估算本日消耗，并显示充值识别、无法审计差额与误差提醒。包内附源码、测试和维修手册；一键维修只把提示填入输入框，由用户决定发送及后续修改。",
+  "author": "sunsun320",
+  "source": "https://github.com/sunsun320/dsh-peak-chip",
+  "issue": "https://github.com/DSH-APP/DSHA/issues/78",
+  "license": "MIT",
+  "installSource": "https://github.com/sunsun320/dsh-peak-chip/releases/download/v4.1.8/dsh-peak-chip-4.1.8.tgz",
+  "testedDsha": "0.1.5-rc2（作者记录）",
+  "testedDsh": "0.1.5-rc.2",
+  "testedByAuthor": true,
+  "checkedAt": "2026-09-28",
+  "packageCheckedAt": "2026-09-28",
+  "download": {
+    "url": "https://dsha.cc/downloads/plugins/dsh-peak-chip-4.1.8.tgz",
+    "upstreamUrl": "https://github.com/sunsun320/dsh-peak-chip/releases/download/v4.1.8/dsh-peak-chip-4.1.8.tgz",
+    "sha256": "437d649065fd1f47d334981ad6587425c21607c49f0d1620a5c57be05875d406",
+    "bytes": 121530,
+    "format": "tgz"
+  },
+  "requirements": [
+    "先在 DSH 配置可用的 DeepSeek API Key，并核对插件的 peer 依赖。",
+    "作者记录基于 DSHA / DSH 0.1.5-rc2；DSH 0.1.7-rc.2 尚未进行本轮实际加载验证。",
+    "安装后保持停用，完成原生静态审阅与确认后再启用。"
+  ],
+  "permissions": [
+    "通过 DSH 凭据服务读取已配置的 DeepSeek API Key，向 api.deepseek.com 查询余额。",
+    "在 dsh-peak-chip 设置命名空间保存余额、统计、调试窗口与自身路径。",
+    "充值跳转使用本机 127.0.0.1:3090 桥及 .bridge_token；缺少桥时只降级该入口，不自动充值。"
+  ],
+  "steps": [
+    "下载本站固定包导入，或用原始 Release 链接在 DSHA 中预览并核对名称、版本与摘要。",
+    "完成原生审阅后启用并重启 Web，检查会话顶部指示灯与余额面板。",
+    "维修按钮只生成待发送提示；如需修改插件，应先看诊断与方案，再决定是否确认。"
+  ],
+  "example": "先确认余额查询可用，再查看本日消耗与误差；费用以服务商实际账单为准。",
+  "limitations": [
+    "消耗来自本地统计与余额推算，不等同于官方计费明细；其他客户端消费和结算延迟会影响差额。",
+    "作者在 DSHA 0.1.5-rc2 的手机 WebView 上报告加载和轮询通过；本轮未复测模型、余额、充值或自动维修功能。",
+    "客户端整体无法加载时，维修按钮也不可用；可自行查阅包内维修手册。"
+  ],
+  "verification": "已下载作者 v4.1.8 固定 Release 包并与 GitHub 公布的 SHA-256 一致；核对 package.json、宿主/客户端入口、依赖、MIT 许可及无安装生命周期脚本。这里只确认包与声明，未执行第三方代码或连接用户模型服务。",
+  "tags": [
+    "社区插件",
+    "余额与用量",
+    "作者测试记录"
+  ]
+},
+{
   "id": "dsh-batch-tool-calls",
+  "issue": "https://github.com/DSH-APP/DSHA/issues/71",
   "name": "批量工具调用提示",
   "packageName": "dsh-batch-tool-calls",
   "kind": "plugin",
@@ -23,8 +79,10 @@ export const entries = [
   "testedDsha": "0.1.6-alpha1（独立宿主检查）",
   "testedDsh": "0.1.6-alpha.1",
   "checkedAt": "2026-09-17",
+  "packageCheckedAt": "2026-09-28",
   "download": {
-    "url": "https://registry.npmjs.org/dsh-batch-tool-calls/-/dsh-batch-tool-calls-1.0.0.tgz",
+    "url": "https://dsha.cc/downloads/plugins/dsh-batch-tool-calls-1.0.0.tgz",
+    "upstreamUrl": "https://registry.npmjs.org/dsh-batch-tool-calls/-/dsh-batch-tool-calls-1.0.0.tgz",
     "sha256": "da52f28308abed7faae3d4ba69f2bf44cf58f5595a1e5167681d45d2cbccadc4",
     "bytes": 14050,
     "format": "tgz"
@@ -44,6 +102,7 @@ export const entries = [
   ],
   "example": "在插件设置中检查是否已生效，按需启用。",
   "limitations": [
+    "2026-09-28 已重新核对固定包字节；尚未将历史宿主测试扩写为 DSH 0.1.7-rc.2 真机兼容验证。",
     "本轮未付费调用模型，未复核作者给出的节省费用比例。",
     "适配检查使用独立 PC 宿主；不代表每个设备和预设都已验证。"
   ],
@@ -56,6 +115,7 @@ export const entries = [
 },
 {
   "id": "dsh-any-background",
+  "issue": "https://github.com/DSH-APP/DSHA/issues/72",
   "name": "自定义主题与壁纸",
   "packageName": "dsh-any-background",
   "kind": "plugin",
@@ -71,8 +131,10 @@ export const entries = [
   "testedDsha": "0.1.6-alpha1（独立宿主检查）",
   "testedDsh": "0.1.6-alpha.1",
   "checkedAt": "2026-09-17",
+  "packageCheckedAt": "2026-09-28",
   "download": {
-    "url": "https://registry.npmjs.org/dsh-any-background/-/dsh-any-background-0.2.8.tgz",
+    "url": "https://dsha.cc/downloads/plugins/dsh-any-background-0.2.8.tgz",
+    "upstreamUrl": "https://registry.npmjs.org/dsh-any-background/-/dsh-any-background-0.2.8.tgz",
     "sha256": "a90f02cbebfdae0c6fff428038df9096f0d6ad3bc94538c4266eb7bd700d7a7e",
     "bytes": 213209,
     "format": "tgz"
@@ -93,6 +155,7 @@ export const entries = [
   ],
   "example": "在插件设置中检查是否已生效，按需启用。",
   "limitations": [
+    "2026-09-28 已重新核对固定包字节；尚未将历史宿主测试扩写为 DSH 0.1.7-rc.2 真机兼容验证。",
     "作者在 issue #72 说明 0.2.8 的图片位置拖动仍依赖鼠标事件，触屏拖动存在限制。",
     "视频、模糊和动画会增加渲染负担，旧设备建议降低模糊并使用静态图片。",
     "本轮验证了 DSH 0.1.6-alpha.1 的独立宿主加载和页面无脚本错误；未覆盖所有主题选项及手机媒体格式。"
@@ -140,62 +203,62 @@ export const entries = [
   },
   {
     id: 'dsh-web-mobile', name: '移动端界面', packageName: 'dsh-web-mobile',
-    kind: 'builtin', category: 'workflow', icon: 'layout', version: '2.4.1-dsha.5',
-    testedDsha: '0.1.6-alpha2', testedDsh: '0.1.6-alpha.2', checkedAt: '2026-09-18',
+    kind: 'builtin', category: 'workflow', icon: 'layout', version: '3.0.3',
+    testedDsha: '0.1.7-rc2', testedDsh: '0.1.7-rc.2', checkedAt: '2026-09-28',
     summary: '让对话、目录和设置适应手机竖屏，减少来回缩放。',
-    description: '为 dsh 的 Web 界面提供窄屏布局、目录抽屉、设置面板和安全区适配。当前版本内置 2.4.1-dsha.5，适配 alpha.2 的右栏预览和输入框布局。',
+    description: '为 dsh 的 Web 界面提供窄屏布局、目录抽屉、设置面板和安全区适配。当前版本内置 3.0.3，支持手机快捷键搜索，并改进触摸手势与聊天区域渲染。',
     author: 'mexiaosh', source: 'https://github.com/mexiaosqwq/dsh-web-mobile', license: 'MIT',
-    requirements: ['DSHA 0.1.6-alpha2，内置 dsh 0.1.6-alpha.2', '标准版使用系统 WebView；兼容版可使用内置 Gecko'],
+    requirements: ['DSHA 0.1.7-rc2，内置 dsh 0.1.7-rc.2', '标准版使用系统 WebView；兼容版可使用内置 Gecko'],
     permissions: ['无需额外 Android 系统授权', '插件在 dsh Web 环境中运行，参与界面渲染'],
     steps: ['打开 DSHA → 插件管理，搜索 dsh-web-mobile。', '按需启用或禁用，然后到启动页重启 Web。', '重新打开对话页，检查窄屏布局和目录抽屉。'],
     example: '在竖屏中展开项目目录，再打开设置；内容应保持在手机可阅读的布局内。',
     limitations: ['随 APK 内置，无需再次下载导入。', '页面布局还会受到系统字体大小和浏览器版本影响。'],
-    verification: '与最终两版 APK 的内置包版本核对；本轮共享功能已在 Android 13 标准版与兼容版检查。具体设备能力仍取决于授权和系统支持。',
+    verification: '已与本次两版正式 APK 的内置包版本核对；Android 13 上的 DSH 启动、网页与插件列表检查通过，不表示每项通知、悬浮或设备能力都在本轮逐项复验。',
     tags: ['手机竖屏', 'Web UI', '无额外系统授权']
   },
   {
     id: 'dsh-device-shell-guide', name: '设备操作引导', packageName: 'dsh-device-shell-guide',
     kind: 'builtin', category: 'device', icon: 'terminal', version: '0.1.19',
-    testedDsha: '0.1.6-alpha2', testedDsh: '0.1.6-alpha.2', checkedAt: '2026-09-18',
+    testedDsha: '0.1.7-rc2', testedDsh: '0.1.7-rc.2', checkedAt: '2026-09-28',
     summary: '让 Agent 了解 DSHA 的设备命令通道，以及使用前需要的授权。',
     description: '随 DSHA 内置的提示引导插件，将设备 Shell 能力说明加入新对话。它帮助 Agent 选择现有通道，实际权限仍由 Android 授权和通道状态决定。',
     author: 'DSHA 内置', source: site.repository, license: 'MIT',
-    requirements: ['DSHA 0.1.6-alpha2', '需要操作设备时，先建立已授权的 ADB 或 Shizuku 通道'],
+    requirements: ['DSHA 0.1.7-rc2', '需要操作设备时，先在设备能力授权中启用并授权 ADB、Shizuku 或 Root 通道'],
     permissions: ['设备操作通过已授权通道执行', '当前设备命令使用白名单，保护系统目录和关键进程；授权不会解除这些限制'],
-    steps: ['在 DSHA 的工作区中配置 ADB，或使用已授权的 Shizuku 通道。', '在插件管理中确认 dsh-device-shell-guide 已启用；变更后重启 Web。', '新建对话，先让 Agent 执行只读设备信息查询并核对结果。'],
+    steps: ['在 DSHA 的设备能力授权中配置 ADB，或使用已授权的 Shizuku / Root 通道。', '在插件管理中确认 dsh-device-shell-guide 已启用；变更后重启 Web。', '新建对话，先让 Agent 执行只读设备信息查询并核对结果。'],
     example: '“读取这台手机的 Android 版本和设备型号，先不要修改设置。”',
     limitations: ['Android 11+ 可使用系统无线调试配对码；旧系统需要适合该系统的其他已授权通道。', '启用引导插件不会自动授予 ADB 或 Shizuku 权限。'],
-    verification: '与最终两版 APK 的内置包版本核对；本轮共享功能已在 Android 13 标准版与兼容版检查。具体设备能力仍取决于授权和系统支持。',
+    verification: '已与本次两版正式 APK 的内置包版本核对；Android 13 上的 DSH 启动、网页与插件列表检查通过，不表示每项通知、悬浮或设备能力都在本轮逐项复验。',
     tags: ['ADB', 'Shizuku', '设备命令']
   },
   {
     id: 'dsh-task-notifier', name: '任务完成通知', packageName: 'dsh-task-notifier',
     kind: 'builtin', category: 'workflow', icon: 'bell', version: '0.1.3',
-    testedDsha: '0.1.6-alpha2', testedDsh: '0.1.6-alpha.2', checkedAt: '2026-09-18',
+    testedDsha: '0.1.7-rc2', testedDsh: '0.1.7-rc.2', checkedAt: '2026-09-28',
     summary: 'Agent 完成一轮任务后，通过 DSHA 本机桥发送系统通知。',
     description: '监听 Agent 回合完成事件，并通过 DSHA 的本机桥接服务通知用户。适合把手机放在一旁等待较长任务完成。',
     author: 'DSHA 内置', source: site.repository, license: 'MIT',
-    requirements: ['DSHA 0.1.6-alpha2', 'DSHA 正常运行，且系统允许 DSHA 显示通知'],
+    requirements: ['DSHA 0.1.7-rc2', 'DSHA 正常运行，且系统允许 DSHA 显示通知'],
     permissions: ['使用 Android 系统通知', '通过本机 DSHA 桥通信；本插件不要求额外模型 API Key'],
     steps: ['在 Android 应用设置中允许 DSHA 通知。', '在插件管理中启用 dsh-task-notifier，变更后重启 Web。', '发起一个简短任务，完成后检查系统通知。'],
     example: '“列出当前工作目录中的一级文件名，完成后告知我。”',
     limitations: ['系统通知权限、免打扰和后台管理可能影响通知显示。', '任务通知不意味着应用能绕过 Android 的后台限制。'],
-    verification: '与最终两版 APK 的内置包版本核对；本轮共享功能已在 Android 13 标准版与兼容版检查。具体设备能力仍取决于授权和系统支持。',
+    verification: '已与本次两版正式 APK 的内置包版本核对；Android 13 上的 DSH 启动、网页与插件列表检查通过，不表示每项通知、悬浮或设备能力都在本轮逐项复验。',
     tags: ['通知', '任务完成', '本机桥']
   },
   {
     id: 'dsh-status-overlay', name: '实时悬浮状态', packageName: 'dsh-status-overlay',
     kind: 'builtin', category: 'workflow', icon: 'layers', version: '0.1.4',
-    testedDsha: '0.1.6-alpha2', testedDsh: '0.1.6-alpha.2', checkedAt: '2026-09-18',
+    testedDsha: '0.1.7-rc2', testedDsh: '0.1.7-rc.2', checkedAt: '2026-09-28',
     summary: '把 Agent 输出与工具状态显示在手机悬浮条中。',
     description: '将 Agent 输出和工具调用状态发送到 DSHA 悬浮条。切换到其他应用时，仍可查看任务进展；显示样式在 DSHA 中调整。',
     author: 'DSHA 内置', source: site.repository, license: 'MIT',
-    requirements: ['DSHA 0.1.6-alpha2', '开启 DSHA 悬浮条，并授予显示在其他应用上层的权限'],
+    requirements: ['DSHA 0.1.7-rc2', '开启 DSHA 悬浮条，并授予显示在其他应用上层的权限'],
     permissions: ['需要 Android 悬浮窗授权', '任务文字可能显示在其他应用上方，注意屏幕共享时的可见内容'],
     steps: ['在 DSHA 中开启悬浮条，完成系统悬浮窗授权。', '确认 dsh-status-overlay 已启用；变更后重启 Web。', '发起一个任务并切换应用，检查悬浮条；可在 DSHA 中关闭。'],
     example: '任务运行时切换到文件管理器，观察悬浮条中的当前状态。',
     limitations: ['悬浮条是应用绘制的覆盖层，显示效果取决于系统限制。', '锁屏及部分受保护页面可能不显示悬浮内容。'],
-    verification: '与最终两版 APK 的内置包版本核对；本轮共享功能已在 Android 13 标准版与兼容版检查。具体设备能力仍取决于授权和系统支持。',
+    verification: '已与本次两版正式 APK 的内置包版本核对；Android 13 上的 DSH 启动、网页与插件列表检查通过，不表示每项通知、悬浮或设备能力都在本轮逐项复验。',
     tags: ['悬浮窗', '实时输出', '任务状态']
   },
   {

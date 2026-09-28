@@ -1,6 +1,6 @@
 # DSHA 网站与插件目录
 
-目标域名：https://dsha.cc。默认页面为插件市场，当前本地产物为 DSHA 0.1.6-alpha2 / dsh 0.1.6-alpha.2，公开部署尚未完成；线上版本以公开更新清单为准。社区插件与技能保留各自的历史测试版本。
+目标域名：https://dsha.cc。默认页面为插件市场，当前构建为 DSHA 0.1.7-rc2 / 147、dsh 0.1.7-rc.2，正式通道；具体上线状态见部署验收记录。社区插件与技能保留各自的历史测试版本。
 
 ## 构建
 
@@ -12,7 +12,7 @@ npm run build
 npm run check
 ```
 
-构建前先在仓库根目录用 `tools/generate-release-manifest.py` 核验 `release` 中的两个最终 APK，指定 `--standard`、`--low`、`--build-tools`、`--java` 和 `--notes`。当前 alpha1 版本使用 `data/current-release-notes.txt`，按已确认的正式发布要求显式传入 `--channel stable`：文件名修正不改变既有发布通道，不能仅凭连字符判断通道。默认输出 `app/build/release-manifest.json` 及 GitHub 发布正文；以后发版时用 `--previous-manifest` 提供上一份线上清单，或保留现有输出供自动读取，避免丢失另一更新通道。
+构建前先在仓库根目录用 `tools/generate-release-manifest.py` 核验 `release` 中的两个最终 APK，指定 `--standard`、`--low`、`--build-tools`、`--java` 和 `--notes`。当前 rc2 正式版使用 `data/current-release-notes.txt`，按已确认的正式发布要求显式传入 `--channel stable`：文件名修正不改变既有发布通道，不能仅凭连字符判断通道。默认输出 `app/build/release-manifest.json` 及 GitHub 发布正文；以后发版时用 `--previous-manifest` 提供上一份线上清单，或保留现有输出供自动读取，避免丢失另一更新通道。
 
 网站读取这份清单，核对两个 APK 的摘要后复制到 `dist/downloads`，同时生成 App 的 `/api/updates.json`。默认源码目录是当前项目父目录，可通过 `DSHA_SOURCE_ROOT` 指定；清单路径可用 `DSHA_RELEASE_MANIFEST` 指定。
 
@@ -37,3 +37,7 @@ npm run check
 具体流程见[发布与回退](deploy/PUBLISHING.md)。连接凭据、既有服务器操作记录和原始取证材料留在本机。
 
 本地预览：`npm run dev`，仅监听 127.0.0.1:4180。远端部署不使用这个开发服务器。
+
+三个新收录条目提供站内固定包镜像：`dsh-batch-tool-calls@1.0.0`、`dsh-any-background@0.2.8`、`dsh-peak-chip@4.1.8`。原包位于 `src/packages`，构建核对大小和 SHA-256 后复制到公开 `downloads/plugins`；保留原始下载地址、MIT 许可和 issue 来源。作者报告与历史宿主检查不冒充当前 rc2 真机验证。
+
+2026-09-28 已上线，当前构建 `b7e6957d3160c9b8`；验证来源、下载与回退范围见[本次官网验收](../docs/website-rc2-20260928.md)。
