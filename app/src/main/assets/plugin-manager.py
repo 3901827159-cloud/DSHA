@@ -16,6 +16,7 @@ import signal
 import sys
 import tarfile
 import tempfile
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -36,9 +37,14 @@ MAX_FILES = 50000
 
 _lifecycle = None
 _last_progress = 0
+_progress_lock = threading.RLock()
 
 
 class PluginCancelled(Exception):
+    pass
+
+
+class PackageCommandTimeout(TimeoutError):
     pass
 
 
@@ -54,6 +60,12 @@ def check_cancel():
 
 
 def progress(stage, message, current=0, total=0, cancellable=True):
+    # 更新元数据可并行查询，进度文件仍由一个写者原子发布。
+    with _progress_lock:
+        _write_progress(stage, message, current, total, cancellable)
+
+
+def _write_progress(stage, message, current=0, total=0, cancellable=True):
     global _last_progress
     if cancellable:
         check_cancel()
@@ -87,7 +99,7 @@ def run_package_command(argv, cwd, timeout=120):
             while process.poll() is None:
                 check_cancel()
                 if time.monotonic() > deadline:
-                    raise ValueError('包管理操作超时，请检查网络后重试')
+                    raise PackageCommandTimeout('包管理操作超时，请检查网络后重试')
                 time.sleep(.15)
         except Exception:
             if os.name != 'nt':
@@ -110,6 +122,19 @@ def lifecycle():
         module_spec.loader.exec_module(module)
         _lifecycle = module.Lifecycle(globals())
     return _lifecycle
+
+
+_network = None
+
+
+def network():
+    global _network
+    if _network is None:
+        descriptor = importlib.util.spec_from_file_location('plugin_network', os.path.join(os.path.dirname(__file__), 'plugin-network.py'))
+        module = importlib.util.module_from_spec(descriptor)
+        descriptor.loader.exec_module(module)
+        _network = module.Network(globals())
+    return _network
 
 
 def result(status, message, **extra):
@@ -235,6 +260,13 @@ def plugin_package(root):
     pkg = read_json(os.path.join(root, "package.json"))
     if not isinstance(pkg, dict) or not builtin.valid_name(pkg.get("name")):
         raise ValueError("package.json 缺少合法的 npm 插件名称")
+    version = pkg.get("version")
+    prerelease = r'(?:0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)'
+    if not isinstance(version, str) or len(version) > 128 or not re.fullmatch(
+            r'(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)'
+            rf'(?:-{prerelease}(?:\.{prerelease})*)?'
+            r'(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?', version):
+        raise ValueError(pkg["name"] + " 的 package.json 缺少有效 version，rc2 无法完成模型请求扩展")
     bundle = (pkg.get("dsh") or {}).get("bundle")
     if not isinstance(bundle, dict) or "patch" not in bundle:
         raise ValueError(pkg["name"] + " 未声明 dsh.bundle.patch（普通 npm 包不是 dsh 插件）")
@@ -331,7 +363,7 @@ def register_plugin(root, source, expected_version=None, *, reviewed=False, rest
         raise ValueError("插件目标目录越界，已停止安装")
     os.makedirs(os.path.dirname(dest), exist_ok=True)
     transaction = transactions()
-    with transaction.workspace() as work:
+    with builtin.operation_lock(check_cancel), transaction.workspace() as work:
         prepared = os.path.join(work, "new")
         shutil.copytree(root, prepared, symlinks=True)
         if not restoring:
@@ -342,7 +374,8 @@ def register_plugin(root, source, expected_version=None, *, reviewed=False, rest
                 if os.path.islink(candidate):
                     safe_target(prepared, os.path.relpath(candidate, prepared))
         old = os.path.join(work, "old")
-        with builtin.operation_lock(check_cancel), committing('正在登记插件：' + name):
+        # 外层已持有数据锁。另开 fd 再 flock 会在 Linux 自锁，不能重复获取。
+        with committing('正在登记插件：' + name):
             builtin.ensure_runtime_modules()
             if expected_version is not None:
                 current_dir = resolve_plugin_dir(name)
@@ -542,58 +575,29 @@ def cmd_delete(name):
         sources = read_json(local(SOURCES), {})
         if not isinstance(sources, dict):
             sources = {}
-        previous_sources = dict(sources)
-        paths = [(local(PLUGIN_SRC), os.path.join(local(PLUGIN_SRC), name)),
-                 (local(builtin.NODE_MODULES), os.path.join(local(builtin.NODE_MODULES), name)),
-                 (local(builtin.NODE_MODULES), builtin.marker_path(name)),
-                 (local(DSH_HOME), lifecycle().history_path(name))]
-        for parent, path in paths:
-            # scope 目录本身可能被换成包外软链，不能只校验 npm 名称。
-            root = os.path.realpath(parent)
-            home = os.path.realpath(local(DSH_HOME))
-            if os.path.commonpath([home, root]) != home:
-                raise ValueError("插件目录指向安装目录以外，已取消删除：" + name)
-            actual_parent = os.path.realpath(os.path.dirname(path))
-            if os.path.commonpath([root, actual_parent]) != root:
-                raise ValueError("插件目录越界，已取消删除：" + name)
-        with tempfile.TemporaryDirectory(prefix=".plugin-delete-", dir=local(DSH_HOME)) as work:
-            moved = []
-            source_written = False
+        transaction = transactions()
+        with transaction.workspace() as work:
+            doc.setdefault("dependencies", {}).pop(name, None)
+            profile = doc.setdefault("dsh", {}).setdefault("profile", {})
+            profile["bundles"] = [bundle for bundle in bundles if bundle != name]
+            sources.pop(name, None)
+            plan = transaction.prepare_delete(work, name, doc, sources)
+            transaction.boundary('delete-prepared')
             try:
-                for index, (_, path) in enumerate(paths):
-                    if os.path.lexists(path):
-                        staged = os.path.join(work, str(index))
-                        os.replace(path, staged)
-                        moved.append((path, staged))
-                doc.setdefault("dependencies", {}).pop(name, None)
-                profile = doc.setdefault("dsh", {}).setdefault("profile", {})
-                profile["bundles"] = [bundle for bundle in bundles if bundle != name]
-                sources.pop(name, None)
-                write_json(local(SOURCES), sources)
-                source_written = True
-                builtin.write_manifest(doc)
+                transaction.apply_delete(work, plan)
             except Exception:
-                for path, staged in reversed(moved):
-                    os.replace(staged, path)
-                if source_written:
-                    write_json(local(SOURCES), previous_sources)
+                try:
+                    transaction.recover(work)
+                except Exception:
+                    # 固定原件和日志留在事务目录，下一次仅在维护屏障内恢复。
+                    raise
                 raise
     result("ok", "已删除 " + name + "；重启 Web 后停止加载。对话和其他插件保留。")
     return 0
 
 
 def open_url(url):
-    check_cancel()
-    parsed = urllib.parse.urlsplit(url)
-    if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password:
-        raise ValueError("下载地址必须是 HTTPS 链接")
-    response = urllib.request.urlopen(urllib.request.Request(url, headers={
-        "User-Agent": "DSHA-plugin-manager", "Accept": "application/vnd.github+json"
-        if parsed.hostname == "api.github.com" else "*/*"}), timeout=30)
-    if urllib.parse.urlsplit(response.url).scheme != "https":
-        response.close()
-        raise ValueError("下载被重定向到非 HTTPS 地址")
-    return response
+    return network().open(url)
 
 
 def archive_download_url(url):
@@ -646,6 +650,9 @@ def github_revision(owner, repo, tree=""):
         parts = tree.split("/")
         if len(parts) > 16 or any(p in ("", ".", "..") for p in parts):
             raise ValueError("无效的仓库目录")
+        # 更新预览已锁定提交，不必再次请求 API 解析同一个提交及子目录。
+        if re.fullmatch('[a-f0-9]{40,64}', parts[0]):
+            return parts[0], '/'.join(parts[1:])
         # 最长匹配支持 feature/foo 等带斜杠分支；不默默改成默认分支。
         for end in range(len(parts), 0, -1):
             candidate = "/".join(parts[:end])
@@ -758,7 +765,8 @@ def cmd_npm(package, *, consume=None):
         raise ValueError("npm 尚未就绪，请关闭终端后重新打开")
     with tempfile.TemporaryDirectory(prefix="plugin-npm-", dir=local(DSH_HOME)) as staging:
         progress('download', '正在获取 npm 发布包…')
-        process = run_package_command(["npm", "pack", "--json", "--ignore-scripts", "--pack-destination", staging, "--", spec], cwd=staging)
+        process = network().package_command(["npm", "pack", "--json", "--ignore-scripts", "--pack-destination", staging, "--", spec], cwd=staging,
+                                            frozen=bool(match.group(2) and re.fullmatch(r'\d+\.\d+\.\d+(?:-[A-Za-z0-9.-]+)?(?:\+[A-Za-z0-9.-]+)?', match.group(2))))
         if process.returncode:
             raise ValueError("npm 插件下载失败：" + (process.stderr or process.stdout)[-1600:].strip())
         packed = json.loads(process.stdout)

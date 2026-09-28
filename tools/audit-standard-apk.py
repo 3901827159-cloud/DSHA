@@ -8,6 +8,7 @@ import json
 import struct
 import tarfile
 import zipfile
+from recovery_apk_assets import archive_locations
 
 
 def deb_payload(raw):
@@ -111,13 +112,20 @@ def main():
             relro_failures.append(name)
 
     with zipfile.ZipFile(args.apk) as apk:
+        recovery_sources = {}
+        if 'assets/recovery-runtime.json' in apk.namelist():
+            recovery_sources = archive_locations(apk, json.loads(apk.read('assets/recovery-runtime.json')))
         for item in apk.infolist():
             if item.filename.startswith("lib/"):
                 with apk.open(item) as stream:
                     check(stream, item.filename, "host")
-        for asset, group in (("offline-rootfs.bin", "rootfs"), ("dsh-runtime.bin", "dsh"), ("glibc-python.bin", "python"),
+        archives = [("offline-rootfs.bin", "rootfs"), ("dsh-runtime.bin", "dsh"), ("glibc-python.bin", "python"),
                              ("adb-wheels.bin", "wheels"), ("python-support.bin", "python_support"),
-                             ("pnpm-runtime.bin", "pnpm"), ("ubuntu-tools.bin", "ubuntu_tools")):
+                             ("pnpm-runtime.bin", "pnpm"), ("ubuntu-tools.bin", "ubuntu_tools")]
+        for logical, physical in recovery_sources.items():
+            if physical not in {name for name, _ in archives}:
+                archives.append((physical, 'recovery_rootfs' if logical == 'recovery-rootfs.bin' else 'recovery_dsh'))
+        for asset, group in archives:
             if asset == 'dsh-runtime.bin' and 'assets/' + asset not in apk.namelist():
                 continue
             with apk.open("assets/" + asset) as stream, tarfile.open(fileobj=stream, mode="r|gz") as archive:
@@ -137,7 +145,7 @@ def main():
                                         check(binary, item.name + "/" + entry.filename, group)
                     else:
                         check(archive.extractfile(item), asset + "/" + item.name, group)
-    report = dict(arm64_elf_counts=counts, unaligned_16k=failures, other_architectures=foreign,
+    report = dict(arm64_elf_counts=counts, recovery_archive_sources=recovery_sources, unaligned_16k=failures, other_architectures=foreign,
                   relro_outside_load=relro_failures,
                   limitation="静态 ELF 检查不能替代真实 16 KB 内核上的 proot / dsh / ADB 运行验证")
     text = json.dumps(report, indent=2, ensure_ascii=False)

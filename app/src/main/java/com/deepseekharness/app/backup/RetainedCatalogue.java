@@ -17,20 +17,79 @@ public final class RetainedCatalogue {
     private static boolean uuid(String id){return id.matches("[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}");}
     public List<Entry> list()throws IOException{
         List<Entry> entries=new ArrayList<>();
-        scan(entries,Kind.BACKUP,new File(files,"host-backup-operations"));
-        scan(entries,Kind.ENVIRONMENT,new File(files,EnvironmentRebuildTransaction.HOME));
-        scan(entries,Kind.RUNTIME,new File(files,ManagedRuntimeTransaction.HOME));
-        scan(entries,Kind.PLUGIN,new File(home,PluginInstallJournals.DIRECTORY));
+        collect(entries);
+        entries.sort(NEWEST_FIRST);return Collections.unmodifiableList(entries);
+    }
+    private static final Comparator<Entry> NEWEST_FIRST=Comparator.<Entry>comparingLong(entry->entry.modified).reversed()
+            .thenComparing(Entry::key).thenComparing(entry->entry.directory.getAbsolutePath());
+    private static final Comparator<Entry> WORST_FIRST=(a,b)->NEWEST_FIRST.compare(b,a);
+    /** Display cursor only. The fingerprint describes the visible catalogue, not source health. */
+    public static final class Cursor {
+        public final long modified;public final String key,path,fingerprint;
+        Cursor(Entry last,String fingerprint){this.modified=last.modified;key=last.key();path=last.directory.getAbsolutePath();this.fingerprint=fingerprint;}
+        Cursor(long modified,String key,String path,String fingerprint){this.modified=modified;this.key=key;this.path=path;this.fingerprint=fingerprint;}
+    }
+    public static final class Page {
+        public final List<Entry> entries;public final int total,size;public final Cursor next;
+        Page(List<Entry> entries,int total,int size,Cursor next){this.entries=Collections.unmodifiableList(entries);this.total=total;this.size=size;this.next=next;}
+        public boolean hasNext(){return next!=null;}
+    }
+    private static final class PageSink extends AbstractList<Entry> {
+        final int size;final Cursor after;final PriorityQueue<Entry> newest;final byte[] sum=new byte[32];
+        int total,eligible;boolean boundarySeen;
+        PageSink(Cursor after,int size){this.after=after;this.size=size;newest=new PriorityQueue<>(11,WORST_FIRST);}
+        @Override public boolean add(Entry entry){
+            byte[] hash=BackupArchive.sha().digest((entry.key()+"\n"+entry.modified+"\n"+entry.status+"\n"
+                    +entry.scope+"\n"+entry.protection+"\n"+entry.displayName+"\n"
+                    +entry.directory.getAbsolutePath()+"\n"+(entry.source==null?"":entry.source.getAbsolutePath()))
+                    .getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            int carry=0;for(int i=31;i>=0;i--){int value=(sum[i]&255)+(hash[i]&255)+carry;sum[i]=(byte)value;carry=value>>>8;}
+            total++;
+            if(after!=null){
+                if(entry.modified==after.modified&&entry.key().equals(after.key)&&entry.directory.getAbsolutePath().equals(after.path))boundarySeen=true;
+                if(entry.modified>after.modified||entry.modified==after.modified&&entry.key().compareTo(after.key)<0
+                        ||entry.modified==after.modified&&entry.key().equals(after.key)
+                        &&entry.directory.getAbsolutePath().compareTo(after.path)<=0)return true;
+            }
+            eligible++;
+            if(newest.size()<size)newest.add(entry);
+            else if(WORST_FIRST.compare(entry,newest.peek())>0){newest.poll();newest.add(entry);}
+            return true;
+        }
+        String fingerprint(){return BackupArchive.hex(sum)+":"+total;}
+        List<Entry> page(){List<Entry> ordered=new ArrayList<>(newest);ordered.sort(NEWEST_FIRST);return ordered;}
+        @Override public Entry get(int index){throw new IndexOutOfBoundsException();}
+        @Override public int size(){return newest.size();}
+    }
+    /** Scan requested history explicitly; retain only one page and reject stale display cursors. */
+    public Page page(Cursor after,int size)throws IOException{
+        if(size<1||size>100)throw new IOException("RETAINED_PAGE");
+        PageSink sink=new PageSink(after,size);collect(sink);String fingerprint=sink.fingerprint();
+        if(after!=null&&(!sink.boundarySeen||!fingerprint.equals(after.fingerprint)))throw new IOException("RETAINED_PAGE_CHANGED");
+        List<Entry> entries=sink.page();Cursor next=sink.eligible>size&&!entries.isEmpty()?new Cursor(entries.get(entries.size()-1),fingerprint):null;
+        return new Page(entries,sink.total,size,next);
+    }
+    private void collect(List<Entry> entries)throws IOException{
+        File backupRoot=HostOperationArchive.root(files);scan(entries,Kind.BACKUP,backupRoot);
+        File completedBackups=HostOperationArchive.completedRoot(files);
+        if(fs.stat(completedBackups).type.equals("DIRECTORY"))scan(entries,Kind.BACKUP,completedBackups);
+        for(var domain:List.of(Map.entry(Kind.ENVIRONMENT,new File(files,EnvironmentRebuildTransaction.HOME)),
+                Map.entry(Kind.RUNTIME,new File(files,ManagedRuntimeTransaction.HOME)),Map.entry(Kind.PLUGIN,new File(home,PluginInstallJournals.DIRECTORY)))){
+            scan(entries,domain.getKey(),domain.getValue());
+            File completed=new File(domain.getValue(),"completed");if(fs.stat(completed).type.equals("DIRECTORY"))scan(entries,domain.getKey(),completed);
+        }
         scan(entries,Kind.QUARANTINE,new File(files,"plugin-imports"));
         presets(entries);
         migrationRecords(entries);
-        entries.sort((a,b)->Long.compare(b.modified,a.modified));return Collections.unmodifiableList(entries);
     }
     private void scan(List<Entry> entries,Kind kind,File parent)throws IOException{
         if(fs.stat(parent).type.equals("MISSING"))return;
         if(!fs.stat(parent).type.equals("DIRECTORY"))throw new IOException("RETAINED_DIRECTORY_UNREADABLE");
-        List<String> names=fs.list(parent);if(names.size()>256)throw new IOException("RETAINED_ENTRY_LIMIT");
+        // Both filesystem implementations return sorted lists. Do not copy the full
+        // directory merely to remove the two reserved names for display.
+        List<String> names=fs.list(parent);
         for(String id:names){
+            if(id.equals(HostOperationArchive.COMPLETED)||id.equals(".completed-proof-v1.json"))continue;
             if(!uuid(id)){entries.add(new Entry(kind,id,"record","unknown","UNRECOGNIZED","UNKNOWN_ORIGINAL_RETAINED",new File(parent,id),null,0));continue;}
             File directory=fs.child(parent,id);
             try{
@@ -39,9 +98,17 @@ public final class RetainedCatalogue {
                 if(marker(directory,"committed")||marker(directory,"finalized"))status="COMMITTED";
                 else if(marker(directory,"rolled-back"))status="ROLLED_BACK";
                 else if(exists(directory,"switching")||kind==Kind.PLUGIN&&exists(directory,"plan.json"))status="RECOVERY_REQUIRED";
+                File other=parent.getName().equals(HostOperationArchive.COMPLETED)
+                        ?new File(parent.getParentFile(),id):new File(parent,HostOperationArchive.COMPLETED+"/"+id);
+                if(!fs.stat(other).type.equals("MISSING"))status="DUPLICATE";
+                if(status.equals("DUPLICATE")){
+                    entries.add(new Entry(kind,id,"record","unknown",status,"UNKNOWN_ORIGINAL_RETAINED",directory,null,fs.stat(directory).modified));
+                    continue;
+                }
                 if(kind==Kind.BACKUP&&exists(directory,"verified.json")){
-                    var copy=VerifiedBackupCopy.inspect(fs,parent,id);
-                    entries.add(new Entry(kind,id,"encrypted",copy.scope,"RECORDED_VERIFIED_COPY","VERIFY_BEFORE_EXPORT_OR_RESTORE",directory,copy.artifact,fs.stat(directory).modified));
+                    var copy=VerifiedBackupCopy.inspect(fs,HostOperationArchive.root(files),id);
+                    entries.add(new Entry(kind,id,"encrypted",copy.scope,"RECORDED_VERIFIED_COPY",
+                            "VERIFY_BEFORE_EXPORT_OR_RESTORE",directory,copy.artifact,fs.stat(directory).modified));
                 }
                 boolean found=false;
                 Set<String> seenProfiles=new HashSet<>();
@@ -88,8 +155,10 @@ public final class RetainedCatalogue {
                         add(entries,kind==Kind.BACKUP?Kind.RESTORE:kind,id,part,"projects",status,directory,root);found=true;
                     }
                 }
-                if(kind==Kind.PLUGIN)for(String part:List.of("old","failed","previous-history","new")){
-                    File root=new File(directory,part);if(fs.stat(root).type.equals("DIRECTORY")){add(entries,kind,id,part,"projects",status,directory,root);found=true;}
+                if(kind==Kind.PLUGIN)for(String part:List.of("old","failed","previous-history","new","delete-source","delete-link","delete-marker","delete-history")){
+                    File root=new File(directory,part);String type=fs.stat(root).type;
+                    if(type.equals("DIRECTORY")){add(entries,kind,id,part,"projects",status,directory,root);found=true;}
+                    else if(!type.equals("MISSING")){entries.add(new Entry(kind,id,part,"projects",status,"ORIGINALS_OR_RECORDS_RETAINED",directory,null,fs.stat(directory).modified));found=true;}
                 }
                 if(!found&&!(kind==Kind.BACKUP&&exists(directory,"verified.json")))entries.add(new Entry(kind,id,"record","unknown",status,"ORIGINALS_OR_RECORDS_RETAINED",directory,null,fs.stat(directory).modified));
             }catch(IOException error){entries.add(new Entry(kind,id,"record","unknown","UNREADABLE","UNKNOWN_ORIGINAL_RETAINED",directory,null,0));}
@@ -126,12 +195,73 @@ public final class RetainedCatalogue {
         if(!exists(directory,name))return false;
         if(!(directory.getName()+"\n"+name+"\n").equals(new String(fs.small(new File(directory,name),256),java.nio.charset.StandardCharsets.UTF_8)))throw new IOException("RETAINED_MARKER_UNREADABLE");return true;
     }
+    public static final class Lookup {
+        public final Map<String,Entry> entries;public final Map<String,String> errors;
+        private final RetainedCatalogue owner;
+        Lookup(RetainedCatalogue owner,Map<String,Entry> entries,Map<String,String> errors){
+            this.owner=owner;this.entries=Collections.unmodifiableMap(entries);this.errors=Collections.unmodifiableMap(errors);
+        }
+    }
+    /** One explicit metadata scan for a selection. It is never a restore authorization. */
+    public Lookup resolveAll(Set<String> requested)throws IOException{
+        if(requested==null||requested.size()>100_000)throw new IOException("RETAINED_KEYS_LIMIT");
+        Set<String> keys=new LinkedHashSet<>(requested),owners=new HashSet<>();Map<String,Entry> found=new LinkedHashMap<>();
+        Map<String,Integer> hits=new HashMap<>();
+        Map<String,String> errors=new LinkedHashMap<>();
+        for(String key:keys){
+            if(key==null||key.length()>512){errors.put(key,"RETAINED_KEY_INVALID");continue;}
+            int first=key.indexOf(':'),second=first<0?-1:key.indexOf(':',first+1);
+            if(first<1||second<first+2||second==key.length()-1){errors.put(key,"RETAINED_KEY_INVALID");continue;}
+            owners.add(key.substring(0,second+1));
+        }
+        Set<String> seenOwners=new HashSet<>(),duplicateOwners=new HashSet<>();
+        class BatchSink extends AbstractList<Entry>{
+            @Override public boolean add(Entry entry){
+                String key=entry.key(),prefix=entry.kind.name()+":"+entry.id+":";
+                if(owners.contains(prefix))seenOwners.add(prefix);
+                if(entry.status.equals("DUPLICATE"))duplicateOwners.add(prefix);
+                if(!keys.contains(key))return true;
+                if(hits.merge(key,1,Integer::sum)>1){errors.put(key,"RETAINED_SOURCE_DUPLICATE");found.remove(key);return true;}
+                if(errors.containsKey(key))return true;
+                if(!uuid(entry.id)){errors.put(key,"RETAINED_KEY_INVALID");found.remove(key);}
+                else if(entry.status.equals("UNREADABLE")){errors.put(key,"RETAINED_SOURCE_UNREADABLE");}
+                else found.put(key,entry);
+                return true;
+            }
+            @Override public Entry get(int index){throw new IndexOutOfBoundsException();}
+            @Override public int size(){return found.size();}
+        }
+        collect(new BatchSink());
+        for(String key:keys){
+            int first=key.indexOf(':'),second=first<0?-1:key.indexOf(':',first+1);
+            if(second>=0&&duplicateOwners.contains(key.substring(0,second+1))){found.remove(key);errors.put(key,"RETAINED_SOURCE_DUPLICATE");}
+            else if(!found.containsKey(key)&&!errors.containsKey(key))
+                errors.put(key,second<0?"RETAINED_KEY_INVALID":seenOwners.contains(key.substring(0,second+1))
+                        ?"RETAINED_SOURCE_CHANGED":"RETAINED_SOURCE_MISSING");
+        }
+        return new Lookup(this,found,errors);
+    }
+    public static boolean sameListing(Entry expected,Entry actual){
+        return expected!=null&&actual!=null&&expected.key().equals(actual.key())&&expected.modified==actual.modified
+                &&expected.status.equals(actual.status)&&expected.scope.equals(actual.scope)
+                &&expected.directory.getAbsolutePath().equals(actual.directory.getAbsolutePath())
+                &&Objects.equals(expected.source==null?null:expected.source.getAbsolutePath(),actual.source==null?null:actual.source.getAbsolutePath());
+    }
     public Entry resolve(String key)throws IOException{
-        for(Entry entry:list())if(entry.key().equals(key)&&uuid(entry.id))return entry;
-        throw new IOException("RETAINED_SOURCE_CHANGED");
+        Lookup checked=resolveAll(Collections.singleton(key));Entry found=checked.entries.get(key);
+        if(found!=null)return found;throw new IOException(checked.errors.getOrDefault(key,"RETAINED_SOURCE_CHANGED"));
     }
     public List<BackupSource> sources(Entry selected)throws IOException{
-        Entry entry=resolve(selected.key());if(entry.source==null||entry.part.equals("encrypted"))throw new IOException("RETAINED_SOURCE_NOT_A_TREE");
+        return sourcesResolved(resolve(selected.key()));
+    }
+    /** Read-only batch inspection uses its freshly resolved entry; export/restore still call sources(). */
+    public List<BackupSource> inspectionSources(Lookup checked,String key)throws IOException{
+        if(checked==null||checked.owner!=this||checked.errors.containsKey(key))throw new IOException("RETAINED_SOURCE_CHANGED");
+        Entry entry=checked.entries.get(key);if(entry==null)throw new IOException("RETAINED_SOURCE_MISSING");
+        return sourcesResolved(entry);
+    }
+    private List<BackupSource> sourcesResolved(Entry entry)throws IOException{
+        if(entry.source==null||entry.part.equals("encrypted"))throw new IOException("RETAINED_SOURCE_NOT_A_TREE");
         File rootfs=entry.kind==Kind.ENVIRONMENT?new File(entry.directory,entry.part.startsWith("previous")?"previous-linux/ubuntu":"failed-linux/ubuntu"):entry.source;
         GuestDataResolver resolver=new GuestDataResolver(fs,rootfs,null,Collections.emptyList());
         List<BackupSource> roots=new ArrayList<>();

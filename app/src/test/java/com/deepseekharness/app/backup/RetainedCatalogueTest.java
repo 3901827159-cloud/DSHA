@@ -65,4 +65,89 @@ public class RetainedCatalogueTest {
         var catalog=new RetainedCatalogue(fs,temp.getRoot(),new File(temp.getRoot(),"home"));var entry=catalog.list().stream().filter(e->e.kind==RetainedCatalogue.Kind.MIGRATION).findFirst().orElseThrow();
         assertEquals("PENDING_RETRY",entry.status);assertNotNull(entry.source);assertEquals("settings",catalog.sources(entry).get(0).scope());
     }
+    @Test public void completedBackupHistoryStaysVisibleInRetainedCatalogue()throws Exception{
+        File files=temp.getRoot(),operations=HostOperationArchive.reserve(fs,files);String id=UUID.randomUUID().toString();File operation=new File(operations,id);fs.directory(operation);
+        byte[] artifact=new byte[80];System.arraycopy(PortableBackupCrypto.MAGIC,0,artifact,0,PortableBackupCrypto.MAGIC.length);File archive=new File(operation,"portable.dshbak");Files.write(archive.toPath(),artifact);
+        String hash=BackupArchive.hex(BackupArchive.sha().digest(artifact));fs.atomic(operation,"verified.json",BackupJson.write(Map.of("encryptedSha256",hash,"encryptedBytes",(long)artifact.length,"entries",0L,
+                "integrity","QUIESCENT","requestedScope","application","createdAt",9L),BackupLimits.MANIFEST));
+        fs.atomic(operation,"operation.json",BackupJson.write(Map.of("version",1L,"id",id,"stage","FINISHED","busy",false,"updatedAt",9L,
+                "result","COMPLETE","error","","artifact","portable.dshbak"),16384));
+        HostOperationArchive.archiveIfTerminal(fs,files,operation);
+        operation=HostOperationArchive.locate(fs,operations,id);archive=new File(operation,"portable.dshbak");
+        var catalog=new RetainedCatalogue(fs,files,new File(files,"home"));var entry=catalog.list().stream().filter(e->e.kind==RetainedCatalogue.Kind.BACKUP&&e.id.equals(id)).findFirst().orElseThrow();
+        assertEquals("encrypted",entry.part);assertEquals(archive.getAbsolutePath(),entry.source.getAbsolutePath());
+        VerifiedBackupCopy.inspect(fs,operations,id).verify(fs,new BackupControl(null));
+    }
+    @Test public void duplicateVerifiedBackupDirectoriesRemainVisibleAndUnactionable()throws Exception{
+        String id=UUID.randomUUID().toString();
+        put("host-backup-operations/"+id+"/verified.json","untrusted original");
+        put("host-backup-operations/completed/"+id+"/verified.json","retained original");
+        var catalog=new RetainedCatalogue(fs,temp.getRoot(),new File(temp.getRoot(),"home"));
+        var rows=catalog.list().stream().filter(entry->entry.kind==RetainedCatalogue.Kind.BACKUP&&entry.id.equals(id)).toList();
+        assertEquals(2,rows.size());assertTrue(rows.stream().allMatch(entry->entry.status.equals("DUPLICATE")&&entry.source==null));
+        assertNotEquals(rows.get(0).directory.getAbsolutePath(),rows.get(1).directory.getAbsolutePath());
+        assertEquals("RETAINED_SOURCE_DUPLICATE",catalog.resolveAll(Set.of("BACKUP:"+id+":encrypted")).errors.get("BACKUP:"+id+":encrypted"));
+    }
+    @Test public void completedPluginHistoryBeyond256HasEveryPageAndDeletionOriginal()throws Exception{
+        File home=new File(temp.getRoot(),"home");Set<String> expected=new HashSet<>();
+        for(int index=0;index<257;index++){
+            String id=UUID.randomUUID().toString();expected.add("PLUGIN:"+id+":delete-source");
+            put("home/plugin-install-operations/completed/"+id+"/delete-source/index.js","old plugin "+index);
+            put("home/plugin-install-operations/completed/"+id+"/committed",id+"\ncommitted\n");
+        }
+        var catalog=new RetainedCatalogue(fs,temp.getRoot(),home);Set<String> actual=new HashSet<>();List<String> pagedOrder=new ArrayList<>();
+        RetainedCatalogue.Cursor cursor=null;
+        for(int index=0;index<6;index++){
+            var page=catalog.page(cursor,50);assertEquals(257,page.total);assertTrue(page.entries.size()<=50);
+            for(var entry:page.entries){actual.add(entry.key());pagedOrder.add(entry.key());}
+            assertEquals(index<5,page.hasNext());
+            cursor=page.next;
+        }
+        assertEquals(expected,actual);
+        assertEquals(catalog.list().stream().map(RetainedCatalogue.Entry::key).toList(),pagedOrder);
+        var recovered=catalog.resolve(expected.iterator().next());assertNotNull(recovered.source);
+        assertThrows(IOException.class,()->catalog.page(null,101));
+        assertFalse(new RetainedCatalogue.Page(List.of(),Integer.MAX_VALUE,100,null).hasNext());
+    }
+    @Test public void cursorDetectsVisibleHistoryChangeAndKeepsOnlyRequestedPage()throws Exception{
+        File home=new File(temp.getRoot(),"home");
+        for(int index=0;index<120;index++){
+            String id=UUID.randomUUID().toString();put("home/plugin-install-operations/completed/"+id+"/delete-source/index.js","version "+index);
+        }
+        var catalog=new RetainedCatalogue(fs,temp.getRoot(),home);var first=catalog.page(null,25);
+        assertEquals(120,first.total);assertEquals(25,first.entries.size());assertNotNull(first.next);
+        var second=catalog.page(first.next,25);assertEquals(25,second.entries.size());
+        String changed=UUID.randomUUID().toString();put("home/plugin-install-operations/completed/"+changed+"/delete-source/index.js","new record");
+        IOException error=assertThrows(IOException.class,()->catalog.page(first.next,25));
+        assertEquals("RETAINED_PAGE_CHANGED",error.getMessage());
+        assertEquals(121,catalog.page(null,25).total);
+    }
+    @Test public void thousandHistoryBatchLookupScansOnceAndReportsPerKeyProblems()throws Exception{
+        File home=new File(temp.getRoot(),"home");List<String> chosen=new ArrayList<>();
+        for(int index=0;index<1000;index++){
+            String id=UUID.randomUUID().toString();put("home/plugin-install-operations/completed/"+id+"/delete-source/index.js","old "+index);
+            if(index<10)chosen.add("PLUGIN:"+id+":delete-source");
+        }
+        JvmBackupFileSystem delegate=new JvmBackupFileSystem();int[] calls={0};
+        BackupFileSystem counted=(BackupFileSystem)java.lang.reflect.Proxy.newProxyInstance(BackupFileSystem.class.getClassLoader(),
+                new Class[]{BackupFileSystem.class},(proxy,method,args)->{calls[0]++;
+                    try{return method.invoke(delegate,args);}catch(java.lang.reflect.InvocationTargetException error){throw error.getCause();}});
+        var catalog=new RetainedCatalogue(counted,temp.getRoot(),home);Set<String> selected=new LinkedHashSet<>(chosen);
+        String missing="PLUGIN:"+UUID.randomUUID()+":delete-source";selected.add(missing);
+        var batch=catalog.resolveAll(selected);int batchCalls=calls[0];assertEquals(10,batch.entries.size());
+        assertEquals("RETAINED_SOURCE_MISSING",batch.errors.get(missing));
+        calls[0]=0;for(String key:chosen)assertNotNull(catalog.resolve(key));int repeatedCalls=calls[0];
+        assertTrue("one batch should avoid a scan per selected record",repeatedCalls>batchCalls*5);
+        System.out.println("RETAINED_BATCH_1000 selected="+selected.size()+" fsCalls="+batchCalls+" repeated="+repeatedCalls);
+        String duplicate=chosen.get(0),id=duplicate.split(":")[1];
+        put("home/plugin-install-operations/"+id+"/delete-source/index.js","duplicate");
+        assertEquals("RETAINED_SOURCE_DUPLICATE",catalog.resolveAll(Set.of(duplicate)).errors.get(duplicate));
+        var two=catalog.list().stream().filter(entry->entry.kind==RetainedCatalogue.Kind.PLUGIN&&entry.id.equals(id)).toList();
+        assertEquals(2,two.size());assertTrue(two.stream().allMatch(entry->entry.status.equals("DUPLICATE")));
+        assertNotEquals(two.get(0).directory.getAbsolutePath(),two.get(1).directory.getAbsolutePath());
+        String changed=chosen.get(1);String changedId=changed.split(":")[1];
+        java.nio.file.Path original=new File(home,"plugin-install-operations/completed/"+changedId+"/delete-source/index.js").toPath();
+        Files.delete(original);Files.delete(original.getParent());
+        assertEquals("RETAINED_SOURCE_CHANGED",catalog.resolveAll(Set.of(changed)).errors.get(changed));
+    }
 }

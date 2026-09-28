@@ -2,6 +2,7 @@
 """设备执行器回归：假设备元数据，拒绝路径与混合进程批次不得进入写操作。"""
 import importlib.util
 from pathlib import Path
+import posixpath
 import shlex
 import types
 import unittest
@@ -12,6 +13,7 @@ policy = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(policy)
 RULES = dict(protected=['/dcim', '/pictures', '/android/data', '/android/obb'],
              aliases=['/sdcard', '/mnt/sdcard', '/storage/self/primary', '/mnt/user/0/primary'],
+             smsProvider='com.android.providers.telephony',
              storage=r'^/storage/(?:emulated/[0-9]+|[A-Fa-f0-9]{4}-[A-Fa-f0-9]{4})(/.*)?$', temporary='/data/local/tmp')
 
 
@@ -25,7 +27,7 @@ class PolicyTest(unittest.TestCase):
         self.users = 'package:example.app uid:12345\npackage:com.dsh.client uid:12346\n'
         self.systems = 'package:android uid:1000\npackage:example.system uid:12347\n'
         self.ps = 'PID UID NAME\n42 12345 example.app\n43 1000 system_server\n44 12346 com.dsh.client\n'
-        self.metadata, self.links = {}, ''
+        self.metadata, self.links, self.realpaths = {}, '', {}
 
     def shell(self, command):
         self.sent.append(command)
@@ -36,7 +38,7 @@ class PolicyTest(unittest.TestCase):
         if argv[0] == '/system/bin/pm': return result(self.systems if '-s' in argv else self.users)
         if argv[0] == '/system/bin/ps': return result(self.ps)
         if argv[0] == '/system/bin/find': return result(self.links)
-        if argv[0] == '/system/bin/readlink': return result(argv[-1])
+        if argv[0] == '/system/bin/readlink': return result(self.realpaths.get(argv[-1], posixpath.normpath('/' + argv[-1].lstrip('/'))))
         return result('executed')
 
     def plan(self, kind, argv, paths):
@@ -97,6 +99,66 @@ class PolicyTest(unittest.TestCase):
     def test_read_arguments_are_quoted_data(self):
         self.execute(self.plan('READ', ['echo', 'a; rm -rf /'], []))
         self.assertEqual(['/system/bin/echo', 'a; rm -rf /'], shlex.split(self.sent[-1]))
+
+    def test_root_reads_and_copy_sources_cannot_read_sms_provider(self):
+        protected = '/data/user/0/com.android.providers.telephony/databases/mmssms.db'
+        for plan in (self.plan('READ', ['cat', protected], []),
+                     self.plan('FILE', ['cp', protected, '/sdcard/Download/messages.db'], [protected, '/sdcard/Download/messages.db'])):
+            plan['su'] = True
+            with self.assertRaises(policy.Blocked): self.execute(plan)
+        self.assertEqual([], self.sent)
+
+        multi = self.plan('FILE', ['cp', '/data/local/tmp/ok', protected, '/sdcard/Download/messages.db'],
+                          ['/data/local/tmp/ok', protected, '/sdcard/Download/messages.db'])
+        multi['su'] = True
+        with self.assertRaises(policy.Blocked): self.execute(multi)
+        self.assertFalse(any(command.startswith('/system/bin/cp ') for command in self.sent))
+
+    def test_root_cannot_follow_symlinked_copy_source_into_sms_provider(self):
+        alias = '/data/local/tmp/innocent.db'
+        self.realpaths[alias] = '/data/user_de/10/com.android.providers.telephony/databases/mmssms.db-wal'
+        plan = self.plan('FILE', ['cp', alias, '/sdcard/Download/copy.db'], [alias, '/sdcard/Download/copy.db'])
+        plan['su'] = True
+        with self.assertRaises(policy.Blocked): self.execute(plan)
+        self.assertIn('/system/bin/readlink -f -- /data/local/tmp/innocent.db', self.sent)
+        self.assertFalse(any(command.startswith('/system/bin/cp ') for command in self.sent))
+
+    def test_root_recursive_traversal_cannot_enter_telephony_tree(self):
+        for command, argv, operands in (
+                ('find /', ['find', '/'], ['/']),
+                ('du', ['du'], []),
+                ('du data', ['du', 'data'], []),
+                ('du /data', ['du', '/data'], ['/data']),
+                ('grep -R sms /data/data', ['grep', '-R', 'sms', '/data/data'], []),
+                ('ls -R', ['ls', '-R'], []),
+                ('ls -R data', ['ls', '-R', 'data'], []),
+                ('ls -R /data/user', ['ls', '-R', '/data/user'], []),
+                ('cp -R /data/data /sdcard/Download/data', ['cp', '-R', '/data/data', '/sdcard/Download/data'], ['/data/data', '/sdcard/Download/data'])):
+            with self.subTest(command=command):
+                self.sent.clear()
+                plan = self.plan('FILE' if argv[0] == 'cp' else 'READ', argv, operands)
+                plan['su'] = True
+                with self.assertRaises(policy.Blocked): self.execute(plan)
+                self.assertFalse(any(sent == '/system/bin/find /' or sent.startswith('/system/bin/cp ') for sent in self.sent))
+        self.assertFalse(policy.sms_provider_descendant('/data/user/0/com.example.app'))
+        self.assertFalse(policy.sms_provider_descendant('/data/data/com.example.app'))
+
+    def test_typed_virtual_screen_requires_ticket_and_exact_managed_source(self):
+        source = '/data/app/com.dsh.client/base.apk'
+        ticket = '0123456789abcdef0123456789abcdef0123456789abcdef'
+        plan = dict(version=1, kind='VIRTUAL_SCREEN', argv=['app_process', '-Djava.class.path=' + source,
+            '/system/bin', 'com.deepseekharness.app.vscreen.VirtualScreenCore', '--launch', '--port', '8800'],
+            sourceApk=source, nativeAuthorization='managed-vscreen-start', nativeTicket=ticket, su=False)
+        self.execute(plan)
+        self.assertEqual('/system/bin/app_process -Djava.class.path=/data/app/com.dsh.client/base.apk /system/bin com.deepseekharness.app.vscreen.VirtualScreenCore --launch --port 8800', self.sent[-1])
+        self.sent.clear()
+        for change in (
+                {'nativeTicket': ''}, {'nativeAuthorization': 'generic'}, {'su': True},
+                {'sourceApk': '/data/app/attacker/base.apk'},
+                {'argv': plan['argv'] + ['--token', 'a' * 48]}):
+            bad = dict(plan); bad.update(change)
+            with self.assertRaises(policy.Blocked): self.execute(bad)
+        self.assertEqual([], self.sent)
 
     def test_refresh_groups_before_each_user_app_stop(self):
         plan = self.plan('STOP', ['am', 'force-stop', 'example.app'], ['example.app'])

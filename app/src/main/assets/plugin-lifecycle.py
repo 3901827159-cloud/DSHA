@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """插件安装预览、更新发现、单版本回退与安全启动；由 plugin-manager 注入既有安装器。"""
 import base64
+import concurrent.futures
 import functools
 import hashlib
 import json
@@ -347,7 +348,7 @@ class Lifecycle:
             if preview['action'] == 'restored':
                 if self.g['resolve_plugin_dir'](name):
                     raise ValueError('已存在同名插件，当前版本保持不变，请先处理冲突')
-                with self.g['transactions']().workspace() as work, self.builtin.operation_lock(self.g['check_cancel']), self.g['committing']('正在启用恢复的插件…'):
+                with self.builtin.operation_lock(self.g['check_cancel']), self.g['transactions']().workspace() as work, self.g['committing']('正在启用恢复的插件…'):
                     doc = self.builtin.read_manifest()
                     if doc is None:
                         raise ValueError('请先准备正常 Web 配置，再启用恢复的插件')
@@ -571,9 +572,9 @@ class Lifecycle:
         doc = self.builtin.read_manifest() or {}
         candidates = [name] if name else list(doc.get('dependencies', {}))
         states = self.read(self.path('plugin-updates.json'), {})
-        checked = []
-        for index, item in enumerate(candidates):
-            self.g['progress']('metadata', '检查版本 %d/%d：%s' % (index + 1, len(candidates), item))
+        targets = []
+        for item in candidates:
+            self.g['check_cancel']()
             if item in self.builtin.OFFICIAL_BUNDLES or item in self.builtin.builtin_names():
                 continue
             if not self.builtin.valid_name(item):
@@ -582,7 +583,14 @@ class Lifecycle:
             pkg = self.read(os.path.join(directory, 'package.json'), {}) if directory else {}
             if not (pkg.get('dsh') or {}).get('bundle'):
                 continue
-            status = {'name': item, 'installedVersion': str(pkg.get('version', '')), 'checkedAt': int(time.time()), 'available': False}
+            targets.append((item, str(pkg.get('version', ''))))
+
+        # 仅远端只读查询并行；状态提交仍在原数据锁内，失败不覆盖其它插件结果。
+        self.g['network']()
+        def inspect(target):
+            item, installed = target
+            self.g['check_cancel']()
+            status = {'name': item, 'installedVersion': installed, 'checkedAt': int(time.time()), 'available': False}
             try:
                 latest, request = self.update_metadata(item)
                 comparison = compare_versions(latest['version'], status['installedVersion'])
@@ -594,7 +602,22 @@ class Lifecycle:
                 raise
             except Exception as error:
                 status['message'] = str(error)
-            states[item] = status; checked.append(status)
+            return status
+
+        completed = {}
+        self.g['progress']('metadata', '正在并行检查插件版本…')
+        with concurrent.futures.ThreadPoolExecutor(max_workers=3) as pool:
+            futures = {pool.submit(inspect, target): target[0] for target in targets}
+            try:
+                for future in concurrent.futures.as_completed(futures):
+                    self.g['check_cancel']()
+                    status = future.result()
+                    completed[status['name']] = status
+                    self.g['progress']('metadata', '检查版本 %d/%d：%s' % (len(completed), len(targets), status['name']))
+            finally:
+                for future in futures:
+                    future.cancel()
+        checked = [completed[item] for item, _ in targets]
         with self.builtin.operation_lock(self.g['check_cancel']), self.g['committing']('正在保存版本检查结果…'):
             latest_states = self.read(self.path('plugin-updates.json'), {})
             latest_states.update({item['name']: item for item in checked})

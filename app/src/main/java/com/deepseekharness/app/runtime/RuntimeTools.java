@@ -28,12 +28,13 @@ final class RuntimeTools {
     static void stage(Context context, File rootfs) throws IOException { prepare(context, rootfs, false); }
 
     private static void prepare(Context context, File rootfs, boolean requireNpm) throws IOException {
+        try (RuntimeHostPorts.Scope scope = RuntimeHostPorts.shared().open()) {
         synchronized (LOCK) {
             try { prepareResolver(context, rootfs); }
             catch(IOException error) { android.util.Log.w("DSHA","DNS configuration unchanged",error); }
             File installedDescriptor = new File(rootfs.getParentFile(), ".runtime-descriptor.json");
             if (requireNpm && installedDescriptor.isFile()
-                    && !com.deepseekharness.app.BackupManager.isDataTaskOwner()) {
+                    && !com.deepseekharness.app.util.MaintenanceGate.shared().isOwner()) {
                 // 已登记运行时的主体只能由维护事务切换。身份完全一致时仍允许修复 APK 自有
                 // 脚本/内置插件覆盖层，解决旧版提前 return 后长期沿用旧文件的问题。
                 String expected = assetRuntimeId(context);
@@ -81,6 +82,7 @@ final class RuntimeTools {
             preparedApk = identity;
             preparedStamp = stamp(rootfs);
         }
+        }
     }
 
     static void invalidate() { synchronized (LOCK) { preparedStamp = null; } }
@@ -127,31 +129,26 @@ final class RuntimeTools {
 
     /** 仅覆盖 DSHA 自有脚本和内置实体；用户插件、profile、配置、会话与凭据不在清单内。 */
     private static void installManagedAssets(Context context, File rootfs) throws IOException {
-        install(context, rootfs, "ca-certificates.crt", CERT_PATH.substring(1), false);
-        install(context, rootfs, "dns-compat.cjs", "usr/local/share/dsha/dns-compat.cjs", false);
-        install(context, rootfs, "dsha-builtin.txt", "root/dsha-builtin.txt", false);
-        for (String name : new String[]{"plugin-manager.py", "plugin-lifecycle.py", "plugin-dependencies.py",
-                "plugin-transactions.py", "backup-plugin-graph.py", "rc1-migration.py", "rc1-settings-migration.cjs", "plugin-semver.cjs",
-                "register-builtin-plugins.py", "startup-observer.cjs", "startup-recovery.py",
-                "startup-checkpoints.py", "device-shell-policy.py", "adb-shell.py"})
-            install(context, rootfs, name, "root/.dsh/" + name, false);
-        install(context, rootfs, "dsha-device-shell.sh", "root/dsh-bin/adb-shell", true);
-        for (String file : new String[]{"package.json", "cordis.patch.yml", "index.js", "activity.js", "runtime-plugins.js", "client.js"})
-            install(context, rootfs, "app-integration/" + file, "root/dsha-app-integration/" + file, false);
-        for (String name : com.deepseekharness.app.util.BuiltinPlugins.DEFAULT_BUILTINS) {
-            String destination = com.deepseekharness.app.util.BuiltinPlugins.entityDir(name).substring(1) + "/";
-            for (String file : new String[]{"package.json", "cordis.patch.yml", "lib/index.js"})
-                install(context, rootfs, "builtin-plugins/" + name + "/" + file, destination + file, false);
-            if (name.equals("dsh-computer-use-android"))
-                install(context,rootfs,"builtin-plugins/"+name+"/lib/server.cjs",destination+"lib/server.cjs",false);
-            if (name.equals("dsh-tool-vscreen"))
-                install(context,rootfs,"builtin-plugins/"+name+"/lib/server.cjs",destination+"lib/server.cjs",false);
-            if (name.equals("dsh-web-mobile")) for (String file : new String[]{"lib/client.js", "lib/compress.js", "lib/delete-session.js", "LICENSE"})
-                install(context, rootfs, "builtin-plugins/" + name + "/" + file, destination + file, false);
-        }
-        install(context, rootfs, "dsha-plugin.sh", "root/dsh-bin/dsha-plugin", true);
-        install(context, rootfs, "install-ubuntu-tools.sh", "root/dsh-bin/install-ubuntu-tools", true);
-        install(context, rootfs, "dsha-runtime-env.sh", "etc/profile.d/dsha-runtime-env.sh", false);
+        try {
+            org.json.JSONObject manifest = new org.json.JSONObject(assetText(context, "managed-runtime-inputs.json"));
+            if (manifest.getInt("schema") != 1) throw new IOException("MANAGED_INPUT_SCHEMA");
+            org.json.JSONArray entries = manifest.getJSONArray("installs");
+            // This table is also consumed by the descriptor and Gradle. Validate it in full
+            // before installing any bytes, so an invalid signed recipe cannot partly apply.
+            java.util.Set<String> targets = new java.util.HashSet<>();
+            for (int i = 0; i < entries.length(); i++) {
+                org.json.JSONObject entry = entries.getJSONObject(i);
+                String asset = entry.getString("asset"), target = entry.getString("target");
+                if (!com.deepseekharness.app.util.ManagedInstallPath.valid(asset)
+                        || !com.deepseekharness.app.util.ManagedInstallPath.valid(target)
+                        || !targets.add(target) || !(entry.get("executable") instanceof Boolean))
+                    throw new IOException("MANAGED_INPUT_PATH");
+            }
+            for (int i = 0; i < entries.length(); i++) {
+                org.json.JSONObject entry = entries.getJSONObject(i);
+                install(context, rootfs, entry.getString("asset"), entry.getString("target"), entry.getBoolean("executable"));
+            }
+        } catch (org.json.JSONException error) { throw new IOException("MANAGED_INPUT_MANIFEST", error); }
     }
 
     /** 局域网代理仍由宿主鉴权；冷安装与候选树必须在计算健康摘要前应用同一设置补丁。 */
@@ -240,14 +237,14 @@ final class RuntimeTools {
         // 特殊文件或外部软链接保持原位；不能跟随 guest 绝对链接写到宿主。
         if (Compat.isSymbolicLink(target) || target.exists() && !target.isFile())return;
         String old=target.isFile()?Compat.readAll(target):"";
-        String updated=com.deepseekharness.app.util.ResolverConfig.reconcile(old,new com.deepseekharness.app.core.ConfigStore(context).getDnsMode());
+        String updated=com.deepseekharness.app.util.ResolverConfig.reconcile(old,RuntimeHostPorts.shared().settings().dnsMode);
         if(!old.equals(updated))writeIfChanged(target,updated.getBytes(java.nio.charset.StandardCharsets.UTF_8),false);
     }
 
     static void applyEnvironment(Context context, File rootfs, Map<String, String> environment) {
         environment.put("DSHA_NATIVE_PLUGIN_MANAGER","1");
         environment.put("DSHA_ANDROID_RUNTIME","1");
-        environment.put("DSHA_DNS_MODE",new com.deepseekharness.app.core.ConfigStore(context).getDnsMode());
+        environment.put("DSHA_DNS_MODE",RuntimeHostPorts.shared().settings().dnsMode);
         String preload="--require=/usr/local/share/dsha/dns-compat.cjs";
         if(new File(rootfs,"usr/local/share/dsha/dns-compat.cjs").isFile()) {
             String previous=environment.getOrDefault("NODE_OPTIONS","");

@@ -92,6 +92,11 @@ public final class ErrorLogRepository extends AndroidViewModel {
         String trialFailure=com.deepseekharness.app.runtime.RuntimeTrial.latestFailure(context);
         if(!trialFailure.isEmpty())text.append(com.deepseekharness.app.util.UiText.choose("\n=== 最近隔离运行试验失败 ===\n","\n=== Latest isolated runtime trial failure ===\n")).append(trialFailure).append('\n');
         text.append(com.deepseekharness.app.util.UiText.text("\n=== 应用操作、崩溃与页面错误 ===\n")).append(DiagnosticLog.read(context));
+        var emergency=com.deepseekharness.app.recovery.RecoveryController.get(context).snapshot();
+        text.append(com.deepseekharness.app.util.UiText.choose("\n=== 独立应急 DSH ===\n","\n=== Independent emergency DSH ===\n"))
+                .append("state=").append(emergency.state).append(" generation=").append(emergency.generation)
+                .append(" instance=").append(emergency.instanceId).append("\n")
+                .append(emergency.errorCode).append("\n").append(emergency.detail).append("\n");
         text.append(com.deepseekharness.app.util.UiText.text("\n=== 本轮启动时间线 ===\n")).append(HarnessController.get(context).startupDiagnostics().snapshot().log);
         text.append(com.deepseekharness.app.util.UiText.choose("\n=== 最近五次启动 ===\n","\n=== Last five starts ===\n"));
         for(com.deepseekharness.app.util.StartupHistoryStore.Entry entry:HarnessController.get(context).startupDiagnostics().history())

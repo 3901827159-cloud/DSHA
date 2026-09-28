@@ -49,21 +49,28 @@ def fixture(root):
         put(root, history + '/state.json', {'name': 'test-plugin', 'version': '0.9.0', 'source': 'owned previous source'})
 
 
+def deletion_fixture(root):
+    fixture(root)
+    # 同时覆盖实体与禁用标记的逐次移动边界，不依赖 Windows 的软链接权限。
+    put(root, 'root/.dsh/profiles/web/node_modules/test-plugin/owned', 'installed entry')
+    put(root, 'root/.dsh/profiles/web/node_modules/test-plugin.disabled', 'DSHA_REVIEW_REQUIRED\n')
+
+
 class TransactionTest(unittest.TestCase):
     def setUp(self):
-        self.root = ROOT / 'app/build/stability-20260914/plugin-transaction-tests' / str(uuid.uuid4())
+        self.root = ROOT / 'app/build/round2-audit/b/plugin-transaction-tests' / str(uuid.uuid4())
         self.root.mkdir(parents=True)
 
     def tearDown(self):
         pass  # 本轮强杀日志和合成文件保留，便于核对失败边界。
 
-    def kill(self, root, boundary, recovery=False):
+    def kill(self, root, boundary, recovery=False, operation='install'):
         marker = root / 'plugin-boundary'
         if marker.exists():
             marker.unlink()
         environment = dict(os.environ, DSHA_TEST_ROOT=str(root), DSH_HOME='/root/.dsh', DSHA_PLUGIN_TEST_BOUNDARY=boundary)
         with (root / ('child-' + boundary + '.log')).open('wb') as log:
-            child = subprocess.Popen([sys.executable, '-B', str(Path(__file__).resolve()), '--child', str(root), 'recover' if recovery else 'install'], stdout=log, stderr=subprocess.STDOUT, env=environment)
+            child = subprocess.Popen([sys.executable, '-B', str(Path(__file__).resolve()), '--child', str(root), 'recover' if recovery else operation], stdout=log, stderr=subprocess.STDOUT, env=environment)
             try:
                 until = time.monotonic() + 20
                 while not marker.exists() and child.poll() is None and time.monotonic() < until:
@@ -106,7 +113,8 @@ class TransactionTest(unittest.TestCase):
         with manager(self.root) as module:
             module.transactions().recover_all()
             self.assertEqual('1.0.0', self.version(self.root, 'root/.dsh/plugin-src/test-plugin'))
-            work = next((self.root / 'root/.dsh/plugin-install-operations').iterdir())
+            self.assertFalse(module.transactions().pending())
+            work = next(path for path in (self.root / 'root/.dsh/plugin-install-operations/completed').iterdir() if path.is_dir())
             self.assertEqual('2.0.0', self.version(self.root, str(work.relative_to(self.root) / 'failed')))
 
     def test_legacy_three_file_journal_preserves_unrecorded_activation_state(self):
@@ -143,6 +151,133 @@ class TransactionTest(unittest.TestCase):
                 module.transactions().recover_all()
             self.assertTrue(old.is_file())
 
+    def test_completed_history_does_not_exhaust_future_transaction_slots(self):
+        with manager(self.root) as module:
+            transaction=module.transactions()
+            home=Path(transaction.directory);home.mkdir(parents=True,exist_ok=True)
+            retained=[]
+            for index in range(129):
+                entry=home/str(uuid.uuid4());entry.mkdir()
+                (entry/'plan.json').write_text(json.dumps({'format':2,'id':entry.name,'historical':index}),encoding='utf8')
+                transaction.mark(str(entry),'committed')
+                retained.append(entry)
+            self.assertEqual([],transaction.pending())
+            with transaction.workspace() as current:
+                self.assertTrue(Path(current).is_dir())
+            self.assertEqual(129,len(list((home/'completed').iterdir())))
+            self.assertTrue(all((home/'completed'/entry.name/'plan.json').is_file() for entry in retained))
+
+    def test_delete_crash_boundaries_restore_or_leave_committed_user_changes(self):
+        boundaries = ('delete-prepared', 'delete-source-moved', 'delete-link-moved',
+                      'delete-marker-moved', 'delete-history-moved',
+                      'delete-sources-replaced', 'delete-manifest-replaced', 'delete-committed')
+        for boundary in boundaries:
+            with self.subTest(boundary=boundary):
+                root = self.root / boundary; root.mkdir(); deletion_fixture(root)
+                manifest = (root / 'root/.dsh/profiles/web/package.json').read_bytes()
+                sources = (root / 'root/.dsh/plugin-sources.json').read_bytes()
+                self.kill(root, boundary, operation='delete')
+                with manager(root) as module:
+                    if boundary == 'delete-committed':
+                        put(root, 'root/.dsh/profiles/web/package.json', {'user': 'later settings'})
+                    module.transactions().recover_all(); module.transactions().recover_all()
+                    self.assertFalse(module.transactions().pending())
+                    source = root / 'root/.dsh/plugin-src/test-plugin'
+                    if boundary == 'delete-committed':
+                        self.assertFalse(source.exists())
+                        self.assertEqual({'user': 'later settings'}, json.loads((root / 'root/.dsh/profiles/web/package.json').read_text()))
+                    else:
+                        self.assertEqual('1.0.0', self.version(root, 'root/.dsh/plugin-src/test-plugin'))
+                        self.assertEqual(manifest, (root / 'root/.dsh/profiles/web/package.json').read_bytes())
+                        self.assertEqual(sources, (root / 'root/.dsh/plugin-sources.json').read_bytes())
+                    self.assertEqual('newest conversation bytes', (root / 'root/.dsh/sessions/owned-conversation').read_text())
+
+    def test_delete_death_during_rollback_is_recoverable(self):
+        deletion_fixture(self.root)
+        self.kill(self.root, 'delete-manifest-replaced', operation='delete')
+        self.kill(self.root, 'delete-rollback-manifest', recovery=True)
+        with manager(self.root) as module:
+            module.transactions().recover_all()
+            self.assertFalse(module.transactions().pending())
+            self.assertEqual('1.0.0', self.version(self.root, 'root/.dsh/plugin-src/test-plugin'))
+
+    def test_delete_modified_staged_original_blocks_recovery(self):
+        deletion_fixture(self.root)
+        self.kill(self.root, 'delete-source-moved', operation='delete')
+        with manager(self.root) as module:
+            work = Path(module.transactions().pending()[0])
+            staged = work / 'delete-source/index.js'
+            staged.write_text('later modifications')
+            with self.assertRaisesRegex(ValueError, '全部现场保留'):
+                module.transactions().recover_all()
+            self.assertEqual('later modifications', staged.read_text())
+            self.assertTrue(module.transactions().pending())
+
+    def test_delete_failed_rollback_keeps_the_only_old_source(self):
+        deletion_fixture(self.root)
+        with manager(self.root) as module:
+            transaction = module.transactions()
+            original_boundary = transaction.boundary
+            original_replace = os.replace
+            def interrupt(name):
+                if name == 'delete-source-moved':
+                    raise OSError('injected commit failure')
+                original_boundary(name)
+            def fail_restore(source, target):
+                if Path(source).name == 'delete-source':
+                    raise OSError('injected rollback failure')
+                return original_replace(source, target)
+            transaction.boundary = interrupt
+            with patch.object(os, 'replace', side_effect=fail_restore):
+                with self.assertRaisesRegex(OSError, 'injected rollback failure'):
+                    module.cmd_delete('test-plugin')
+            work = Path(transaction.pending()[0])
+            self.assertEqual('1.0.0', self.version(self.root, work.relative_to(self.root) / 'delete-source'))
+            self.assertFalse((self.root / 'root/.dsh/plugin-src/test-plugin').exists())
+            transaction.boundary = original_boundary
+            transaction.recover_all()
+            self.assertEqual('1.0.0', self.version(self.root, 'root/.dsh/plugin-src/test-plugin'))
+
+    def test_read_only_pending_does_not_move_committed_work_still_used_by_child(self):
+        deletion_fixture(self.root)
+        marker = self.root / 'plugin-boundary'
+        environment = dict(os.environ, DSHA_TEST_ROOT=str(self.root), DSH_HOME='/root/.dsh',
+                           DSHA_PLUGIN_TEST_BOUNDARY='delete-committed')
+        with (self.root / 'child-commit-pause.log').open('wb') as log:
+            child = subprocess.Popen([sys.executable, '-B', str(Path(__file__).resolve()), '--child', str(self.root), 'delete'],
+                                     stdout=log, stderr=subprocess.STDOUT, env=environment)
+            try:
+                deadline = time.monotonic() + 20
+                while not marker.exists() and child.poll() is None and time.monotonic() < deadline:
+                    time.sleep(.025)
+                self.assertTrue(marker.exists())
+                with manager(self.root) as module:
+                    self.assertEqual([], module.transactions().pending())
+                    home = Path(module.transactions().directory)
+                    self.assertEqual(1, len([p for p in home.iterdir() if p.is_dir()]))
+                    self.assertFalse((home / 'completed').exists())
+            finally:
+                child.kill(); child.wait(timeout=5)
+        with manager(self.root) as module:
+            module.transactions().recover_all()
+            self.assertFalse(module.transactions().pending())
+            self.assertEqual(1,len(list((Path(module.transactions().directory)/'completed').iterdir())))
+
+    def test_committed_id_lookup_and_recovery_are_idempotent_after_archive(self):
+        deletion_fixture(self.root)
+        with manager(self.root) as module:
+            module.cmd_delete('test-plugin')
+            transactions = module.transactions()
+            work = next(path for path in (Path(transactions.directory)/'completed').iterdir() if path.is_dir())
+            self.assertEqual(work, Path(transactions.locate(work.name)))
+            manifest = put(self.root,'root/.dsh/profiles/web/package.json',{'user':'later changes'})
+            transactions.recover(str(work));transactions.recover(str(work))
+            self.assertEqual({'user':'later changes'},json.loads(manifest.read_text()))
+            active = Path(transactions.directory)/work.name
+            active.mkdir()
+            with self.assertRaisesRegex(ValueError,'重复'):
+                transactions.locate(work.name)
+
 
 if __name__ == '__main__':
     if len(sys.argv) == 4 and sys.argv[1] == '--child':
@@ -150,6 +285,8 @@ if __name__ == '__main__':
         with manager(root) as module:
             if sys.argv[3] == 'recover':
                 module.transactions().recover_all()
+            elif sys.argv[3] == 'delete':
+                module.cmd_delete('test-plugin')
             else:
                 module.register_plugin(str(root / 'incoming'), 'owned fixture', reviewed=True)
     else:

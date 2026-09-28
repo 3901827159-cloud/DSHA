@@ -24731,5 +24731,184 @@
     "files": [
       "app/src/main/java/com/deepseekharness/app/ui/BackgroundTasksActivity.java"
     ]
+  },
+  {
+    "id": "alpha2_3063",
+    "zh": "[无法核验终端本次进程身份，保留环境占用：",
+    "en": "[Could not verify this terminal process identity; environment remains protected: ",
+    "files": [
+      "app/src/main/java/com/deepseekharness/app/util/TerminalSession.java"
+    ]
+  },
+  {
+    "id": "alpha2_3064",
+    "zh": "终端会话身份发生变化",
+    "en": "Terminal session identity changed",
+    "files": [
+      "app/src/main/java/com/deepseekharness/app/core/SimpleTerminalBackend.java"
+    ]
+  },
+  {
+    "id": "alpha2_3065",
+    "zh": "终端组号缺少本次出生身份",
+    "en": "Terminal group lacks this session's birth identity",
+    "files": [
+      "app/src/main/java/com/deepseekharness/app/core/SimpleTerminalBackend.java"
+    ]
+  },
+  {
+    "id": "alpha2_3066",
+    "zh": "未取得终端本次会话身份，保留环境占用",
+    "en": "Could not establish this terminal session identity; environment remains protected",
+    "files": [
+      "app/src/main/java/com/deepseekharness/app/core/SimpleTerminalBackend.java"
+    ]
+  },
+  {
+    "id": "alpha2_3067",
+    "zh": "终端进程身份无效",
+    "en": "Invalid terminal process identity",
+    "files": [
+      "app/src/main/java/com/deepseekharness/app/runtime/TerminalProcessCloser.java"
+    ]
+  },
+  {
+    "id": "alpha2_3068",
+    "zh": "终端本次进程身份不匹配，原环境保持保护",
+    "en": "Terminal process identity does not match this session; the environment remains protected",
+    "files": [
+      "app/src/main/java/com/deepseekharness/app/runtime/TerminalProcessCloser.java"
+    ]
+  },
+  {
+    "id": "alpha2_3069",
+    "zh": "终端会话号已变化，原环境保持保护",
+    "en": "Terminal session ID changed; the environment remains protected",
+    "files": [
+      "app/src/main/java/com/deepseekharness/app/runtime/TerminalProcessCloser.java"
+    ]
+  },
+  {
+    "id": "alpha2_3070",
+    "zh": "终端本次进程身份缺失",
+    "en": "This terminal process identity is missing",
+    "files": [
+      "app/src/main/java/com/deepseekharness/app/runtime/TerminalProcessCloser.java"
+    ]
+  },
+  {
+    "id": "alpha2_3071",
+    "zh": "终端组长出生身份已变化，未发送信号",
+    "en": "Terminal leader birth identity changed; no signal was sent",
+    "files": [
+      "app/src/main/java/com/deepseekharness/app/runtime/TerminalProcessCloser.java"
+    ]
+  },
+  {
+    "id": "alpha2_3072",
+    "zh": "终端进程 UID 不属于本应用",
+    "en": "Terminal process UID does not belong to this app",
+    "files": [
+      "app/src/main/java/com/deepseekharness/app/runtime/TerminalProcessCloser.java"
+    ]
+  },
+  {
+    "id": "alpha2_3073",
+    "zh": "无法核验终端进程 UID",
+    "en": "Could not verify terminal process UID",
+    "files": [
+      "app/src/main/java/com/deepseekharness/app/runtime/TerminalProcessCloser.java"
+    ]
+  },
+  {
+    "id": "plugin_net_0",
+    "zh": "下载源：",
+    "en": "Download source: ",
+    "files": [
+      "app/src/main/java/com/deepseekharness/app/ui/PluginFragment.java",
+      "app/src/main/assets/plugin-network.py"
+    ]
+  },
+  {
+    "id": "plugin_net_1",
+    "zh": "自动选择（推荐）",
+    "en": "Automatic (recommended)",
+    "files": [
+      "app/src/main/java/com/deepseekharness/app/ui/PluginFragment.java",
+      "app/src/main/assets/plugin-network.py"
+    ]
+  },
+  {
+    "id": "plugin_net_2",
+    "zh": "npm 官方源",
+    "en": "Official npm registry",
+    "files": [
+      "app/src/main/java/com/deepseekharness/app/ui/PluginFragment.java",
+      "app/src/main/assets/plugin-network.py"
+    ]
+  },
+  {
+    "id": "plugin_net_3",
+    "zh": "npmmirror 国内镜像",
+    "en": "npmmirror registry",
+    "files": [
+      "app/src/main/java/com/deepseekharness/app/ui/PluginFragment.java",
+      "app/src/main/assets/plugin-network.py"
+    ]
+  },
+  {
+    "id": "plugin_net_4",
+    "zh": "插件下载源",
+    "en": "Plugin download source",
+    "files": [
+      "app/src/main/java/com/deepseekharness/app/ui/PluginFragment.java",
+      "app/src/main/assets/plugin-network.py"
+    ]
+  },
+  {
+    "id": "plugin_net_5",
+    "zh": "自动选择可用的 npm 源；镜像失败时回退官方源。GitHub 使用官方直连。",
+    "en": "Automatic selects an available npm registry; mirror failures fall back to the official registry. GitHub uses its official endpoints.",
+    "files": [
+      "app/src/main/java/com/deepseekharness/app/ui/PluginFragment.java",
+      "app/src/main/assets/plugin-network.py"
+    ]
+  },
+  {
+    "id": "plugin_net_6",
+    "zh": "正在选择可用的 npm 下载源…",
+    "en": "Selecting an available npm registry…",
+    "files": [
+      "app/src/main/java/com/deepseekharness/app/ui/PluginFragment.java",
+      "app/src/main/assets/plugin-network.py"
+    ]
+  },
+  {
+    "id": "plugin_net_7",
+    "zh": "当前 npm 源不可用，正在切换备用源…",
+    "en": "The npm registry is unavailable; trying the fallback…",
+    "files": [
+      "app/src/main/java/com/deepseekharness/app/ui/PluginFragment.java",
+      "app/src/main/assets/plugin-network.py"
+    ]
+  },
+  {
+    "id": "plugin_net_8",
+    "zh": "正在并行检查插件版本…",
+    "en": "Checking plugin versions in parallel…",
+    "files": [
+      "app/src/main/java/com/deepseekharness/app/ui/PluginFragment.java",
+      "app/src/main/assets/plugin-network.py"
+    ]
+  },
+  {
+    "id": "plugin_net_9",
+    "zh": "正在下载插件及依赖：%s",
+    "en": "Downloading plugin and dependencies: %s",
+    "files": [
+      "app/src/main/java/com/deepseekharness/app/ui/PluginFragment.java",
+      "app/src/main/assets/plugin-network.py"
+    ],
+    "uiFormat": true
   }
 ]

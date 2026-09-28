@@ -217,9 +217,11 @@ public class ConfigFragment extends Fragment {
         try {
             if (!on) {
                 com.deepseekharness.app.LanProxyService.stopLanListener();
+                com.deepseekharness.app.HarnessService.refreshPowerMode();
                 return;
             }
-            HarnessController hc = new HarnessController(requireContext());
+            com.deepseekharness.app.HarnessService.ensureLanForeground(requireContext());
+            HarnessController hc = HarnessController.get(requireContext());
             long gen = hc.getWebGeneration();
             if (gen <= 0 || !com.deepseekharness.app.LanProxyService.hasDshAuth(gen)) {
                 // dsh 还没起来/还没交换 cookie：等下次进入对话时 HarnessController 自动启动

@@ -57,6 +57,7 @@ public class PluginFragment extends Fragment {
     private ArrayList<String> pendingExports = new ArrayList<>();
     private android.net.Uri pendingImport;
     private AlertDialog previewDialog;
+    private String deferredPreviewId;
     /** Repository 随 Activity 留存；失效记录不能只挂在被替换的 Fragment 上。仅主线程访问。 */
     private static long installedRevision;
     private static final java.util.WeakHashMap<PluginRepository, Long> refreshedRevisions = new java.util.WeakHashMap<>();
@@ -170,6 +171,7 @@ public class PluginFragment extends Fragment {
             if (names != null) pendingExports = names;
             String imported = saved.getString("pendingImport");
             if (imported != null) pendingImport = android.net.Uri.parse(imported);
+            deferredPreviewId = saved.getString("deferredPreviewId");
         }
         linkInput = find(R.id.appbar_github_input);
         linkHint = find(R.id.pluginLinkHint);
@@ -183,6 +185,9 @@ public class PluginFragment extends Fragment {
         find(R.id.btnInstalled).setOnClickListener(v -> selectTab(false));
         find(R.id.btnRefresh).setOnClickListener(v -> repository.refresh());
         find(R.id.btnPluginUpdates).setOnClickListener(v -> repository.checkUpdates(null));
+        find(R.id.btnPluginDownloadSource).setOnClickListener(v -> showDownloadSources());
+        updateDownloadSourceLabel();
+        ((TextView) find(R.id.pluginDownloadHint)).setText(com.deepseekharness.app.util.UiText.text("自动选择可用的 npm 源；镜像失败时回退官方源。GitHub 使用官方直连。"));
         find(R.id.btnCancelPluginTask).setOnClickListener(v -> repository.cancelTask());
         find(R.id.btnPluginRestore).setOnClickListener(v -> new com.deepseekharness.app.ui.DshaDialogBuilder(requireContext())
                 .setTitle(com.deepseekharness.app.util.UiText.text("恢复第三方插件？")).setMessage(com.deepseekharness.app.util.UiText.text("恢复安全启动前已启用的插件；之后手动禁用的插件保持禁用。恢复后重启 Web 生效。"))
@@ -205,13 +210,18 @@ public class PluginFragment extends Fragment {
             return false;
         });
         TextView status = find(R.id.statusText);
-        status.setOnClickListener(v -> {
-            if (current != null && !current.message.isEmpty())
-                new com.deepseekharness.app.ui.DshaDialogBuilder(requireContext()).setTitle(com.deepseekharness.app.util.UiText.text("插件操作结果"))
-                        .setMessage(com.deepseekharness.app.util.UiStateText.render(current.message)).setPositiveButton(com.deepseekharness.app.util.UiText.text("关闭"), null).show();
+        status.setOnClickListener(v -> showPluginStatus());
+        repository.state().observe(getViewLifecycleOwner(), state -> {
+            current = state; render();
+            // finishTask publishes non-busy before its onSuccess clears a discarded preview.
+            // Defer until that callback completes; a failed discard keeps the same preview.
+            if (state != null && !state.busy && root != null) root.post(this::showInstallPreview);
         });
-        repository.state().observe(getViewLifecycleOwner(), state -> { current = state; render(); });
-        repository.preview().observe(getViewLifecycleOwner(), ignored -> showInstallPreview());
+        repository.preview().observe(getViewLifecycleOwner(), value -> {
+            if (value == null) deferredPreviewId = null;
+            showInstallPreview();
+            if (current != null) render();
+        });
         recognizeLink();
     }
 
@@ -231,6 +241,7 @@ public class PluginFragment extends Fragment {
         state.putString("sortOrder", sortOrder.name());
         state.putStringArrayList("pendingExports", pendingExports);
         if (pendingImport != null) state.putString("pendingImport", pendingImport.toString());
+        if (deferredPreviewId != null) state.putString("deferredPreviewId", deferredPreviewId);
     }
 
     @Override public void onDestroyView() {
@@ -264,14 +275,69 @@ public class PluginFragment extends Fragment {
         if (root == null || repository.isBusy() || previewDialog != null) return;
         PluginRepository.Preview preview = repository.preview().getValue();
         if (preview == null) return;
+        if (preview.id.equals(deferredPreviewId)) return;
         previewDialog = new com.deepseekharness.app.ui.DshaDialogBuilder(requireContext()).setTitle(com.deepseekharness.app.util.UiText.text(preview.action.equals("install")?"确认安装插件":"审阅插件启用或回退"))
                 .setMessage(preview.description())
-                .setNegativeButton(com.deepseekharness.app.util.UiText.text("取消"), (d, w) -> repository.discardPreview())
+                .setNegativeButton(com.deepseekharness.app.util.UiText.text("取消"), (d, w) -> discardShownPreview(preview))
                 .setPositiveButton(com.deepseekharness.app.util.UiText.text(preview.action.equals("install")?"确认安装":preview.action.equals("rollback")?"确认回退":"确认启用"), (d, w) -> repository.confirmPreview())
-                .setOnCancelListener(d -> repository.discardPreview()).create();
+                .setOnCancelListener(d -> discardShownPreview(preview)).create();
         previewDialog.setOnDismissListener(d -> previewDialog = null);
         previewDialog.show();
         if(preview.blocked())previewDialog.getButton(android.content.DialogInterface.BUTTON_POSITIVE).setEnabled(false);
+    }
+
+    private void updateDownloadSourceLabel() {
+        com.deepseekharness.app.util.PluginDownloadSource source =
+                new com.deepseekharness.app.core.ConfigStore(requireContext()).getPluginDownloadSource();
+        String[] labels = downloadSourceLabels();
+        ((TextView) find(R.id.btnPluginDownloadSource)).setText(
+                com.deepseekharness.app.util.UiText.text("下载源：") + labels[source.ordinal()]);
+    }
+
+    private String[] downloadSourceLabels() {
+        return new String[]{com.deepseekharness.app.util.UiText.text("自动选择（推荐）"),
+                com.deepseekharness.app.util.UiText.text("npm 官方源"),
+                com.deepseekharness.app.util.UiText.text("npmmirror 国内镜像")};
+    }
+
+    private void showDownloadSources() {
+        if (repository.isBusy()) return;
+        com.deepseekharness.app.core.ConfigStore config = new com.deepseekharness.app.core.ConfigStore(requireContext());
+        new DshaDialogBuilder(requireContext())
+                .setTitle(com.deepseekharness.app.util.UiText.text("插件下载源"))
+                .setSingleChoiceItems(downloadSourceLabels(), config.getPluginDownloadSource().ordinal(), (dialog, which) -> {
+                    if (!repository.isBusy()) {
+                        config.setPluginDownloadSource(com.deepseekharness.app.util.PluginDownloadSource.values()[which]);
+                        updateDownloadSourceLabel();
+                    }
+                    dialog.dismiss();
+                }).setNegativeButton(com.deepseekharness.app.util.UiText.text("取消"), null).show();
+    }
+
+    private void discardShownPreview(PluginRepository.Preview shown) {
+        // A failed cleanup keeps the same preview. Do not reopen the same dialog on
+        // the next non-busy state update; the user can retry explicitly from status.
+        deferredPreviewId = shown.id;
+        repository.discardPreview();
+    }
+
+    private void showPluginStatus() {
+        if (current == null || current.message.isEmpty()) return;
+        PluginRepository.Preview retained = repository.preview().getValue();
+        boolean deferred = retained != null && retained.id.equals(deferredPreviewId) && !repository.isBusy();
+        var dialog = new com.deepseekharness.app.ui.DshaDialogBuilder(requireContext())
+                .setTitle(com.deepseekharness.app.util.UiText.text("插件操作结果"))
+                .setMessage(com.deepseekharness.app.util.UiStateText.render(current.message));
+        if (deferred) {
+            dialog.setPositiveButton(com.deepseekharness.app.util.UiText.choose("查看保留预览", "View retained preview"), (d, w) -> {
+                deferredPreviewId = null;
+                if (root != null) root.post(this::showInstallPreview);
+            }).setNeutralButton(com.deepseekharness.app.util.UiText.choose("重试清理", "Retry cleanup"), (d, w) -> {
+                deferredPreviewId = retained.id;
+                repository.discardPreview();
+            }).setNegativeButton(com.deepseekharness.app.util.UiText.choose("稍后处理", "Handle later"), null);
+        } else dialog.setPositiveButton(com.deepseekharness.app.util.UiText.text("关闭"), null);
+        dialog.show();
     }
 
     private void recognizeLink() {
@@ -373,8 +439,13 @@ public class PluginFragment extends Fragment {
         if (current.percent >= 0) progress.setProgress(current.percent);
         find(R.id.btnCancelPluginTask).setVisibility(current.busy ? View.VISIBLE : View.GONE);
         find(R.id.btnCancelPluginTask).setEnabled(current.cancellable);
-        ((TextView) find(R.id.statusText)).setText(com.deepseekharness.app.util.UiStateText.render(current.message));
-        for (int id : new int[]{R.id.btnImport, R.id.btnExport, R.id.btnRefresh, R.id.btnPluginUpdates, R.id.btnPluginRestore})
+        PluginRepository.Preview retained = repository.preview().getValue();
+        boolean deferred = retained != null && retained.id.equals(deferredPreviewId) && !current.busy;
+        ((TextView) find(R.id.statusText)).setText(com.deepseekharness.app.util.UiStateText.render(current.message)
+                + (deferred ? com.deepseekharness.app.util.UiText.choose(
+                        "\n清理未确认；预览已保留。点此重试或稍后处理。",
+                        "\nCleanup is unconfirmed; the preview is retained. Tap to retry or handle it later.") : ""));
+        for (int id : new int[]{R.id.btnImport, R.id.btnExport, R.id.btnRefresh, R.id.btnPluginUpdates, R.id.btnPluginRestore, R.id.btnPluginDownloadSource})
             find(id).setEnabled(!current.busy);
         TextView sort=find(R.id.btnSort);
         sort.setText(sortLabels()[sortOrder.ordinal()]);

@@ -76,6 +76,14 @@ public class ConfigStore {
         prefs.edit().putString("plugin_sort_order",mode.name()).apply();
     }
 
+    public com.deepseekharness.app.util.PluginDownloadSource getPluginDownloadSource() {
+        return com.deepseekharness.app.util.PluginDownloadSource.parse(text("plugin_download_source", "auto"));
+    }
+
+    public void setPluginDownloadSource(com.deepseekharness.app.util.PluginDownloadSource source) {
+        prefs.edit().putString("plugin_download_source", source.value).apply();
+    }
+
     // ================= 接入 =================
 
     public String getDnsMode() { return com.deepseekharness.app.util.ResolverConfig.mode(text("dns_mode", "auto")); }
@@ -211,6 +219,20 @@ public class ConfigStore {
     public void setProrootStaticLoader(boolean value) { prefs.edit().putBoolean("proroot_static_loader",value).apply(); }
     public boolean isProotSeccompDisabled() { return flag("proot_disable_seccomp",false); }
     public void setProotSeccompDisabled(boolean value) { prefs.edit().putBoolean("proot_disable_seccomp",value).apply(); }
+
+    /** One SharedPreferences image for a complete native runtime invocation. */
+    public com.deepseekharness.app.runtime.RuntimeHostPorts.Settings runtimeSettingsSnapshot() {
+        return runtimeSettingsFrom(prefs.getAll());
+    }
+    static com.deepseekharness.app.runtime.RuntimeHostPorts.Settings runtimeSettingsFrom(java.util.Map<String, ?> values) {
+        return new com.deepseekharness.app.runtime.RuntimeHostPorts.Settings(
+                com.deepseekharness.app.util.ResolverConfig.mode(
+                        com.deepseekharness.app.util.PreferenceValue.text(values.get("dns_mode"), "auto")),
+                "proroot".equals(com.deepseekharness.app.util.PreferenceValue.text(
+                        values.get(Constants.KEY_CONTAINER_RUNTIME), "proot")),
+                com.deepseekharness.app.util.PreferenceValue.flag(values.get("proroot_static_loader"), true),
+                com.deepseekharness.app.util.PreferenceValue.flag(values.get("proot_disable_seccomp"), false));
+    }
 
     public boolean isLanMode() {
         return flag(Constants.KEY_LAN_MODE, false);

@@ -11,7 +11,11 @@
 
 rc2.1 收尾执行两个 flavor 的完整单测、Release Lint、离线 APK 资产与签名核验；真机使用独立非调试验收包，记录见 `docs/releases/v0.1.5-rc2.1-build130.md`。最低 API 与真实 16 KB 页设备未在本轮覆盖。
 
-本地软件验收入口为 `python tools/verify-stability.py`。配置已有 JDK/SDK、`GRADLE_USER_HOME` 和历史 `DSHA_KEYSTORE` 后运行。真机另用 E7E3 同签名正式包覆盖安装并做非破坏性检查，确认正常后才使用 `--deliver` 替换同版本常规文件名的 APK/摘要。旧 `--device` 审计流程已停用，不会再生成独立测试包。工具不提交、上传或发布；缺历史密钥仍明确报告未完成，不生成替代发布签名。
+本地软件验收入口为 `python tools/verify-stability.py`。配置已有 JDK/SDK、`GRADLE_USER_HOME` 和历史 `DSHA_KEYSTORE` 后运行；当前门禁还要求与源码及锁定归档一致的 `app/build/test-runtimes/current.json` 夹具，可先运行 `python tools/prepare-test-runtime.py`。真机另用 E7E3 同签名正式包覆盖安装并做非破坏性检查；本地 `--deliver` 必须同时提供 `--device-evidence <JSON>`，其内容绑定两版 APK 的 SHA-256、包名、候选版本码、E7E3 指纹、设备序列号、首次安装时间保持以及两 flavor 的实际检查结果，才替换同版本常规文件名的 APK/摘要。旧 `--device` 审计流程已停用，不会再生成独立测试包。工具不提交、上传或发布；缺历史密钥仍明确报告未完成，不生成替代发布签名。
+
+受管归档或启动器源码变化时，先显式运行 `python tools/prepare-backup-assets.py --write` 与 `python tools/prepare-runtime-descriptor.py --write`，审阅生成的受跟踪证明，再构建。Gradle 仅以 `--check` 核验两份证明与当前输入一致，不在普通构建中改写源码树。
+
+`--device-evidence` 是本机验收记录，不能把旧包记录挪给新包。JSON 须包含 `schema: 1`、`package: "com.dsh.client"`、`versionCode`、E7E3 的 `certificateSha256`、实际 `serial`、`firstInstallTimePreserved: true`、`nonDestructive: true`；`flavors.standard` 与 `flavors.low` 分别写入本轮候选 APK 的小写 `sha256`、`result: "PASS"`，以及已实际完成的 `checks`：`web-ready`、`existing-data-preserved`、`plugins-visible`、`recovery-ready`、`no-crash`。原始设备输出与脱敏操作记录须另存，JSON 只绑定这些证据与文件身份。
 
 alpha2 及后续版本在替换发布目录前还必须运行 `python tools/verify-plugin-upgrade-gate.py`。该门禁统一检查旧链接缓存失效、插件发现/启停、原生审阅、依赖冻结、安装事务强杀恢复、Web 原生管理入口、旧工作流包名兼容，以及最终 Standard/Low APK 内的受管插件和共享依赖链接；任一子检查失败时退出非零。
 
@@ -111,8 +115,8 @@ $env:DSHA_PYTHON = 'C:\Python312\python.exe'
 ## 7. 版本号修改
 
 - 版本名/版本号在 `app/build.gradle` 的 `defaultConfig`：
-  - `versionName "0.1.6-alpha2.1"` （标准版；low flavor 追加 `low`）
-  - `versionCode 142`（沿用原发布签名覆盖安装；通过全部门禁后才替换 `release` 同名文件）
+  - `versionName "0.1.7-rc2"` （标准版；low flavor 追加 `low`）
+  - `versionCode 147`（沿用原发布签名覆盖安装；通过全部门禁后才替换 `release` 同名文件）
 
 ## 8. 内置 proot 说明（改前必读）
 

@@ -191,12 +191,12 @@ seed_gradle_dist() {
 # 任务输出的**惰性 provider**，`-x` 排除后 provider 永远无法兑现，Gradle 直接报
 # "Querying the mapped value ... before task has completed is not supported"。
 #
-# 所以改成把 build-tools 里的 aidl 换成 shim：任务照常跑完，下游拿到的是
-# tools/aidl-stub/ 里人工核对过的等价产物（本项目的 AIDL 源只有一个 IShellService.aidl、
-# 两个方法，手写完全合理）。原二进制备份为 aidl.x86_64.disabled。
+# 所以临时把 build-tools 里的 aidl 换成 shim：任务照常跑完，下游拿到的是
+# tools/aidl-stub/ 里人工核对过的等价产物。原二进制备份为 aidl.x86_64.disabled，
+# 构建退出时恢复；被 SIGKILL 打断后下次运行也只在备份和 shim 均可核验时接管。
 #
 # 已搭好 qemu-user + binfmt 的主机可设 DSHA_FORCE_AIDL=1 走原生 aidl；
-# 恢复原状：mv $ANDROID_SDK_ROOT/build-tools/<ver>/aidl.x86_64.disabled .../aidl
+# 如异常现场无法自动确认备份，请先人工核对，不覆盖未知 aidl。
 probe_aidl_arch() {
     "$DSHA_PYTHON" - "$SDK" <<'PY'
 import glob, os, struct, sys
@@ -227,6 +227,27 @@ else:
 PY
 }
 
+AIDL_SHIM_BIN=""
+AIDL_SHIM_BAK=""
+restore_aidl_on_exit() {
+    local status=$?
+    trap - EXIT
+    if [ -n "$AIDL_SHIM_BIN" ]; then
+        if [ -f "$AIDL_SHIM_BAK" ] && { { [ ! -e "$AIDL_SHIM_BIN" ] && [ ! -L "$AIDL_SHIM_BIN" ]; } \
+                || { [ -f "$AIDL_SHIM_BIN" ] \
+                && head -2 "$AIDL_SHIM_BIN" | grep -q '由 build.sh 生成的 aidl 替身'; }; }; then
+            if ! mv -f "$AIDL_SHIM_BAK" "$AIDL_SHIM_BIN"; then
+                echo "ERROR: 未能恢复原生 aidl：$AIDL_SHIM_BIN" >&2
+                status=1
+            fi
+        else
+            echo "ERROR: aidl shim 或原件状态已变化，保留现场供核对：$AIDL_SHIM_BIN" >&2
+            status=1
+        fi
+    fi
+    exit "$status"
+}
+
 install_aidl_shim() {
     local stub="$ROOT/tools/aidl-stub" bt bin bak line
     find "$stub" -name '*.java' | grep -q . || { echo "ERROR: $stub 里没有等价产物" >&2; return 1; }
@@ -235,19 +256,18 @@ install_aidl_shim() {
     bin="$bt/aidl"
     bak="$bin.x86_64.disabled"
     [ -e "$bin" ] || { echo "ERROR: 找不到 $bin" >&2; return 1; }
-    line="$(head -1 "$bin" 2>/dev/null || true)"
+    AIDL_SHIM_BIN="$bin"
+    AIDL_SHIM_BAK="$bak"
+    trap restore_aidl_on_exit EXIT
+    line="$(head -2 "$bin" 2>/dev/null || true)"
     if printf '%s' "$line" | grep -q '由 build.sh 生成的 aidl 替身'; then
+        [ -f "$bak" ] || { echo "ERROR: 旧 aidl shim 缺少原生备份：$bak" >&2; return 1; }
         echo "==> aidl shim 已在位：$bin"
         return 0
     fi
-    if [ -x "$bak" ]; then
-        echo "==> 先恢复原生 aidl：$bak"
-        mv -f "$bak" "$bin"
-        chmod +x "$bin" 2>/dev/null || true
-    else
-        echo "==> 备份原生 aidl（x86_64，本机不可执行）：$bin -> aidl.x86_64.disabled"
-        mv -f "$bin" "$bak"
-    fi
+    [ ! -e "$bak" ] || { echo "ERROR: aidl 已有未知备份，拒绝覆盖：$bak" >&2; return 1; }
+    echo "==> 备份原生 aidl（x86_64，本机不可执行）：$bin -> aidl.x86_64.disabled"
+    mv -f "$bin" "$bak"
     cat > "$bin" <<SHIM
 #!/usr/bin/env bash
 # 由 build.sh 生成的 aidl 替身：主机架构与 build-tools 不符，原生 aidl 跑不起来。
@@ -277,7 +297,7 @@ if [ -z "${DSHA_FORCE_AIDL:-}" ]; then
     case "$AIDL_STATE" in
         ok) echo "==> aidl 架构与主机一致（$AIDL_STATE），走原生 AIDL 编译" ;;
         mismatch:*)
-            install_aidl_shim || echo "ERROR: aidl shim 安装失败，AIDL 编译将失败" >&2
+            install_aidl_shim || { echo "ERROR: aidl shim 安装失败，停止构建" >&2; exit 1; }
             echo "==> build-tools 与主机架构不符（${AIDL_STATE#mismatch:}）：已换 shim，AIDL 产物取自 tools/aidl-stub/"
             ;;
         no-aidl)

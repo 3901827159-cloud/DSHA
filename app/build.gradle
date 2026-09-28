@@ -79,6 +79,8 @@ android {
     packagingOptions {
         jniLibs {
             useLegacyPackaging = true
+            // 应急启动器按签名 APK 中的完整字节校验，禁止打包阶段再改写这两份 ELF。
+            keepDebugSymbols += ['**/libproot.so', '**/libprootloader.so']
             // 使用 app 自带的同版本 16 KB JNI，覆盖 terminal-emulator AAR 中的旧库。
             pickFirsts += ['**/libtermux.so']
             excludes += ['**/x86/**', '**/x86_64/**', '**/armeabi/**', '**/armeabi-v7a/**']
@@ -104,7 +106,8 @@ android {
     }
 
     sourceSets {
-        main.assets.setSrcDirs([layout.buildDirectory.dir("generated/standardAssets")])
+        main.assets.setSrcDirs([layout.buildDirectory.dir("generated/standardAssets").get().asFile,
+                layout.buildDirectory.dir("generated/recoveryAssets").get().asFile])
         main.java.srcDir(layout.buildDirectory.dir("generated/uiLanguage").get().asFile)
     }
 }
@@ -130,6 +133,7 @@ tasks.configureEach {
 def prepareStandardAssets = tasks.register("prepareStandardAssets", Exec) {
     inputs.dir("src/main/assets")
     inputs.file(rootProject.file("tools/prepare-standard-assets.py"))
+    inputs.file(rootProject.file("tools/generated_asset_directory.py"))
     inputs.file(rootProject.file("tools/prepare-web-compat.mjs"))
     inputs.files(rootProject.files("tools/web-compat/entry.cjs", "tools/web-compat/package.json", "tools/web-compat/package-lock.json"))
     inputs.file(rootProject.file("tools/build-dsh-runtime.py"))
@@ -147,18 +151,65 @@ def prepareBackupAssets = tasks.register("prepareBackupAssets", Exec) {
     inputs.file(rootProject.file("tools/prepare-backup-assets.py"))
     inputs.file(file("src/main/assets/dsh-runtime.bin"))
     outputs.file(file("src/main/assets/managed-package-proofs.json"))
-    commandLine(System.getenv("DSHA_PYTHON") ?: "python3", "-B", rootProject.file("tools/prepare-backup-assets.py").absolutePath)
+    commandLine(System.getenv("DSHA_PYTHON") ?: "python3", "-B", rootProject.file("tools/prepare-backup-assets.py").absolutePath, "--check")
 }
 prepareStandardAssets.configure { dependsOn(prepareBackupAssets) }
+def runtimeInputContractFile = file("src/main/assets/managed-runtime-inputs.json")
+def runtimeInputContract = new groovy.json.JsonSlurper().parse(runtimeInputContractFile)
+if (runtimeInputContract.schema != 1) throw new GradleException("未知受管运行时输入契约")
 def prepareRuntimeDescriptor = tasks.register("prepareRuntimeDescriptor", Exec) {
     inputs.file(rootProject.file("tools/prepare-runtime-descriptor.py"))
-    inputs.files(fileTree("src/main/assets") { exclude "runtime-descriptor.json", "managed-package-proofs.json" })
-    inputs.files(fileTree("src/main/jniLibs"), fileTree("src/low/jniLibs"), fileTree("src/main/java/com/deepseekharness/app/runtime"),
-            file("src/main/java/com/deepseekharness/app/util/WebProcSel.java"), file("src/main/java/com/deepseekharness/app/util/WebPidIdentity.java"))
+    inputs.file(rootProject.file("tools/runtime_input_contract.py"))
+    inputs.file(rootProject.file("tools/dsh-runtime/package.json"))
+    inputs.file(runtimeInputContractFile)
+    (runtimeInputContract.assetFiles + runtimeInputContract.installs.collect { it.asset }).unique().each {
+        inputs.file(file("src/main/assets/${it}"))
+    }
+    runtimeInputContract.assetTrees.each { inputs.files(fileTree("src/main/assets/${it}")) }
+    runtimeInputContract.launcherTrees.each { path ->
+        inputs.files(fileTree(rootProject.file(path)) { include path.contains('/java/') ? '**/*.java' : '**/*.so' })
+    }
+    runtimeInputContract.launcherSources.each { inputs.file(file("src/main/java/com/deepseekharness/app/${it}")) }
     outputs.file(file("src/main/assets/runtime-descriptor.json"))
-    commandLine(System.getenv("DSHA_PYTHON") ?: "python3", "-B", rootProject.file("tools/prepare-runtime-descriptor.py").absolutePath)
+    commandLine(System.getenv("DSHA_PYTHON") ?: "python3", "-B", rootProject.file("tools/prepare-runtime-descriptor.py").absolutePath, "--check")
 }
+def verifyRuntimeDescriptorInputs = tasks.register("verifyRuntimeDescriptorInputs", Exec) {
+    inputs.file(rootProject.file("tools/test-runtime-descriptor-inputs.py"))
+    inputs.file(rootProject.file("tools/prepare-runtime-descriptor.py"))
+    inputs.file(rootProject.file("tools/runtime_input_contract.py"))
+    inputs.file(runtimeInputContractFile)
+    inputs.file(file("build.gradle"))
+    commandLine(System.getenv("DSHA_PYTHON") ?: "python3", "-B", rootProject.file("tools/test-runtime-descriptor-inputs.py").absolutePath)
+}
+prepareRuntimeDescriptor.configure { dependsOn(verifyRuntimeDescriptorInputs) }
 prepareStandardAssets.configure { dependsOn(prepareRuntimeDescriptor) }
+
+// 应急运行时拥有独立锁；正式 DSH 更新不会把它隐式替换。
+def prepareRecoveryAssets = tasks.register("prepareRecoveryAssets", Exec) {
+    dependsOn(prepareStandardAssets)
+    inputs.file(rootProject.file("tools/prepare-recovery-assets.py"))
+    inputs.file(rootProject.file("tools/recovery_runtime_overlay.py"))
+    inputs.file(rootProject.file("tools/generated_asset_directory.py"))
+    inputs.file(rootProject.file("tools/recovery-runtime/lock.json"))
+    // 正式归档变化必须重算物理位置；固定副本可以首次缺失后由同摘要种子建立。
+    inputs.files(layout.buildDirectory.file("generated/standardAssets/offline-rootfs.bin"),
+            layout.buildDirectory.file("generated/standardAssets/dsh-runtime.bin"))
+            .withPropertyName("recoverySharedArchives").optional()
+    inputs.files(fileTree(rootProject.file("tools/recovery-runtime/archives")))
+            .withPropertyName("recoveryPinnedArchives")
+    inputs.files(file("src/main/assets/recovery-agent.js"), file("src/main/assets/recovery-profile-package.json"), file("src/main/assets/recovery-profile.patch.yml"))
+    inputs.files(file("src/main/assets/web-integration/es-compat.js"), file("src/main/assets/web-integration/startup.js"), file("src/main/assets/pdf-compat-patch.json"),
+            file("src/main/assets/language-patch.json"), file("src/main/assets/web-integration/language.js"))
+    inputs.files(fileTree("src/main/jniLibs"), fileTree("src/low/jniLibs"))
+    outputs.dir(layout.buildDirectory.dir("generated/recoveryAssets"))
+    commandLine(System.getenv("DSHA_PYTHON") ?: "python3", "-B",
+            rootProject.file("tools/prepare-recovery-assets.py").absolutePath,
+            "--output", layout.buildDirectory.dir("generated/recoveryAssets").get().asFile.absolutePath,
+            "--shared-assets", layout.buildDirectory.dir("generated/standardAssets").get().asFile.absolutePath)
+}
+tasks.configureEach {
+    if (name.matches("merge(Standard|Low).*Assets")) dependsOn(prepareRecoveryAssets)
+}
 
 def verifyBackupDependencies = tasks.register("verifyBackupDependencies") {
     inputs.file(rootProject.file("tools/backup-dependencies.lock.json"))
@@ -185,7 +236,7 @@ def verifyBackupDependencies = tasks.register("verifyBackupDependencies") {
     }
 }
 tasks.withType(JavaCompile).configureEach { dependsOn(verifyBackupDependencies) }
-tasks.named("preBuild").configure { dependsOn(prepareStandardAssets) }
+tasks.named("preBuild").configure { dependsOn(prepareStandardAssets, prepareRecoveryAssets) }
 def prepareUiLanguages = tasks.register("prepareUiLanguages", Exec) {
     inputs.file(rootProject.file("tools/prepare-ui-languages.py"))
     inputs.file(rootProject.file("tools/i18n/messages.json"))

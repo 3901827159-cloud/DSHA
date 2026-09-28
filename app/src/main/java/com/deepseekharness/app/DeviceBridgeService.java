@@ -335,7 +335,7 @@ public class DeviceBridgeService extends Service {
             }
         } catch (Throwable ignored) {
         }
-        HarnessController c = new HarnessController(this);
+        HarnessController c = HarnessController.get(this);
         ProotBootstrap proot = c.proot();
         if (!proot.isEnvironmentReady()) {
             setAdbState("no_env", com.deepseekharness.app.util.UiText.text("环境未就绪"));

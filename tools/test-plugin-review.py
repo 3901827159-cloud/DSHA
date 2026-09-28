@@ -132,6 +132,22 @@ class ReviewTest(unittest.TestCase):
             self.assertFalse(any(name.endswith(('/.npmrc','/.env','/.dsha-dependencies.json')) for name in names))
         self.assertIn('owned-secret',(self.package/'.npmrc').read_text());self.assertTrue((self.package/'.env').exists())
 
+    def test_plugin_without_valid_version_cannot_reach_review_or_activation(self):
+        original=json.loads((self.package/'package.json').read_text(encoding='utf8'))
+        for bad in (None,'','latest',1,'1.2','1.0.0-01','1.0.0-rc.01'):
+            pkg=dict(original)
+            if bad is None:pkg.pop('version')
+            else:pkg['version']=bad
+            self.put(self.package/'package.json',pkg)
+            with self.assertRaisesRegex(ValueError,'version'):
+                self.manager.plugin_package(self.package)
+            with self.assertRaisesRegex(ValueError,'version'):
+                self.life.review_existing('test-plugin')
+            self.assertFalse(self.enabled())
+        pkg=dict(original,version='0.1.7-rc.2+5')
+        self.put(self.package/'package.json',pkg)
+        self.assertEqual('0.1.7-rc.2+5',self.manager.plugin_package(self.package)['version'])
+
     @unittest.skipIf(os.name=='nt','恢复插件真实软链启用在 Android/Linux 验证')
     def test_restored_new_name_activates_from_preserved_dependency_group(self):
         source,preview=self.restored('restored-fixture');self.approve(preview)

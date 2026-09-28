@@ -17,6 +17,16 @@ def sha(path):
     return value.hexdigest()
 
 
+def sync_directory(path):
+    if os.name == 'nt':
+        return
+    descriptor = os.open(path, os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0))
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
 class Transactions:
     def __init__(self, manager):
         self.g = manager
@@ -31,21 +41,66 @@ class Transactions:
             raise ValueError('插件事务目录越界')
         return path
 
+    def locate(self, operation):
+        active = self.path(operation)
+        retained = os.path.join(self.directory, 'completed', operation)
+        history = os.path.join(self.directory, 'completed')
+        if os.path.islink(history) or os.path.islink(retained):
+            raise ValueError('插件事务历史目录越界，原件已保留')
+        a, h = os.path.lexists(active), os.path.lexists(retained)
+        if a and h:
+            raise ValueError('插件活动与完成日志重复，原件已保留')
+        if not a and not h:
+            raise ValueError('插件事务记录不存在')
+        selected = active if a else retained
+        if not os.path.isdir(selected):
+            raise ValueError('插件事务目录类型异常，原件已保留')
+        return selected
+
     def pending(self):
         if not os.path.isdir(self.directory):
             return []
         names = sorted(os.listdir(self.directory))
-        if len(names) > 256:
-            raise ValueError('保留的插件事务超过上限')
         result = []
         for name in names:
+            if name in ('completed', '.completed-proof-v1.json'):
+                continue
             path = self.path(name)
+            if os.path.lexists(os.path.join(self.directory, 'completed', name)):
+                raise ValueError('插件活动与完成日志重复，原件已保留')
             if not os.path.isfile(os.path.join(path, 'plan.json')):
                 continue
             if self.marker(path, 'committed') or self.marker(path, 'rolled-back'):
                 continue
             result.append(path)
         return result
+
+    def archive_terminal(self):
+        history = os.path.join(self.directory, 'completed')
+        if os.path.lexists(history) and (os.path.islink(history) or not os.path.isdir(history)):
+            raise ValueError('插件完成历史目录类型异常')
+        for name in sorted(os.listdir(self.directory)):
+            if name in ('completed', '.completed-proof-v1.json'):
+                continue
+            path = self.path(name)
+            if not os.path.isdir(path):
+                raise ValueError('插件事务目录类型异常，原件已保留')
+            if not (self.marker(path, 'committed') or self.marker(path, 'rolled-back')):
+                continue
+            plan_file = os.path.join(path, 'plan.json')
+            if self.state(plan_file)['kind'] != 'file':
+                raise ValueError('插件完成日志计划类型异常，原件已保留')
+            plan = self.g['read_json'](plan_file, None)
+            if not isinstance(plan, dict) or plan.get('id') != name or plan.get('format') not in (1, 2, 3):
+                raise ValueError('插件完成日志无有效计划，原件已保留')
+            if self.marker(path, 'committed') and self.marker(path, 'rolled-back'):
+                raise ValueError('插件事务终态冲突，原件已保留')
+            os.makedirs(history, exist_ok=True)
+            target = os.path.join(history, name)
+            if os.path.lexists(target):
+                raise ValueError('插件活动与完成日志重复，原件已保留')
+            os.replace(path, target)
+            sync_directory(self.directory); sync_directory(history)
 
     @staticmethod
     def marker(path, name):
@@ -69,13 +124,19 @@ class Transactions:
     @contextlib.contextmanager
     def workspace(self):
         os.makedirs(self.directory, exist_ok=True)
+        self.archive_terminal()
         if self.pending():
             raise ValueError('存在中断的插件事务，请先恢复')
-        if len(os.listdir(self.directory)) >= 128:
-            raise ValueError('保留的插件事务已达上限，原件未自动删除')
+        # Historical committed and failed candidates remain owned records;
+        # their total count must not permanently disable future installs.
         work = self.path(str(uuid.uuid4())); os.mkdir(work)
         # 成功/失败均保留已归属日志和历史原件；不让 TemporaryDirectory 清理唯一旧版本。
-        yield work
+        try:
+            yield work
+        finally:
+            # Callers leave the work scope under the plugin operation lock only
+            # after their last read of the committed/rolled-back directory.
+            self.archive_terminal()
 
     def targets(self, name):
         if not self.g['builtin'].valid_name(name):
@@ -92,6 +153,118 @@ class Transactions:
         if not stat.S_ISREG(info.st_mode) or info.st_size > 8 * 1024 * 1024:
             raise ValueError('插件事务配置类型或大小异常')
         return {'kind': 'file', 'sha256': sha(path), 'mode': stat.S_IMODE(info.st_mode)}
+
+    def delete_targets(self, name):
+        if not self.g['builtin'].valid_name(name):
+            raise ValueError('插件事务包名无效')
+        paths = {'source': self.g['local'](os.path.join(self.g['PLUGIN_SRC'], name)),
+                 'link': os.path.join(self.g['local'](self.g['builtin'].NODE_MODULES), name),
+                 'marker': self.g['builtin'].marker_path(name),
+                 'history': self.g['lifecycle']().history_path(name)}
+        home = os.path.realpath(self.home)
+        scopes = {'source': self.g['local'](self.g['PLUGIN_SRC']),
+                  'link': self.g['local'](self.g['builtin'].NODE_MODULES),
+                  'marker': self.g['local'](self.g['builtin'].NODE_MODULES),
+                  'history': self.home}
+        for key, path in paths.items():
+            scope = os.path.realpath(scopes[key])
+            parent = os.path.realpath(os.path.dirname(path))
+            if os.path.commonpath([home, scope]) != home or os.path.commonpath([scope, parent]) != scope:
+                raise ValueError('插件目录指向安装目录以外，已取消删除：' + name)
+        return paths
+
+    def object_state(self, path):
+        if not os.path.lexists(path):
+            return {'kind': 'missing'}
+        info = os.lstat(path)
+        if stat.S_ISLNK(info.st_mode):
+            return {'kind': 'link', 'target': os.readlink(path)}
+        if stat.S_ISDIR(info.st_mode):
+            return {'kind': 'directory', 'sha256': self.g['dependencies']().tree(path, self.g['check_cancel'])[0]}
+        return self.state(path)
+
+    def prepare_delete(self, work, name, manifest, sources):
+        objects = self.delete_targets(name)
+        before = {key: self.object_state(path) for key, path in objects.items()}
+        config = {}
+        for key, path, value in (('sources', self.g['local'](self.g['SOURCES']), sources),
+                                 ('manifest', self.g['local'](self.g['builtin'].MANIFEST), manifest)):
+            prior = self.state(path)
+            if prior['kind'] not in ('missing', 'file'):
+                raise ValueError('插件配置类型异常，原件已保留')
+            if prior['kind'] == 'file':
+                shutil.copy2(path, os.path.join(work, 'before-' + key))
+                if self.state(os.path.join(work, 'before-' + key)) != prior:
+                    raise ValueError('插件配置副本摘要不一致')
+            output = os.path.join(work, 'after-' + key)
+            self.g['write_json'](output, value)
+            config[key] = {'before': prior, 'after': self.state(output)}
+        plan = {'format': 3, 'id': os.path.basename(work), 'name': name,
+                'objects': before, 'config': config}
+        self.g['write_json'](os.path.join(work, 'plan.json'), plan)
+        sync_directory(work)
+        return plan
+
+    def apply_delete(self, work, plan):
+        objects = self.delete_targets(plan['name'])
+        for key, path in objects.items():
+            saved = os.path.join(work, 'delete-' + key)
+            if plan['objects'][key]['kind'] != 'missing':
+                if self.object_state(path) != plan['objects'][key] or os.path.lexists(saved):
+                    raise ValueError('插件原件在删除期间变化，全部现场保留')
+                os.replace(path, saved)
+                sync_directory(os.path.dirname(path)); sync_directory(work)
+                self.boundary('delete-' + key + '-moved')
+        for key in ('sources', 'manifest'):
+            path = self.g['local'](self.g['SOURCES'] if key == 'sources' else self.g['builtin'].MANIFEST)
+            states = plan['config'][key]
+            if self.state(path) not in (states['before'], states['after']):
+                raise ValueError('插件配置在删除期间变化，全部现场保留')
+            self.replace_file(work, path, key, 'after', states['after'])
+            sync_directory(os.path.dirname(path))
+            self.boundary('delete-' + key + '-replaced')
+        self.mark(work, 'committed')
+        sync_directory(work)
+        self.boundary('delete-committed')
+
+    def recover_delete(self, work, plan):
+        name = plan['name']
+        objects = self.delete_targets(name)
+        configs = {'sources': self.g['local'](self.g['SOURCES']),
+                   'manifest': self.g['local'](self.g['builtin'].MANIFEST)}
+        if set(plan.get('objects', {})) != set(objects) or set(plan.get('config', {})) != set(configs):
+            raise ValueError('插件删除目录映射无效，全部现场保留')
+        for key, path in configs.items():
+            states = plan['config'][key]
+            if set(states) != {'before', 'after'} or self.state(path) not in (states['before'], states['after']):
+                raise ValueError('插件配置在中断后变化，未覆盖新内容')
+            if states['before']['kind'] == 'file' and self.state(os.path.join(work, 'before-' + key)) != states['before']:
+                raise ValueError('插件配置原件摘要不一致，全部现场保留')
+        for key, path in objects.items():
+            wanted = plan['objects'][key]
+            saved = os.path.join(work, 'delete-' + key)
+            current = self.object_state(path)
+            staged = self.object_state(saved)
+            if wanted['kind'] == 'missing':
+                if current != wanted or staged != wanted:
+                    raise ValueError('插件删除现场出现额外文件，全部现场保留')
+            elif not ((current == wanted and staged['kind'] == 'missing')
+                      or (current['kind'] == 'missing' and staged == wanted)):
+                raise ValueError('插件原件在中断后变化，全部现场保留')
+        for key in ('manifest', 'sources'):
+            states = plan['config'][key]
+            self.replace_file(work, configs[key], key, 'before', states['before'])
+            sync_directory(os.path.dirname(configs[key]))
+            self.boundary('delete-rollback-' + key)
+        for key in reversed(tuple(objects)):
+            path = objects[key]
+            saved = os.path.join(work, 'delete-' + key)
+            if os.path.lexists(saved):
+                os.replace(saved, path)
+                sync_directory(os.path.dirname(path)); sync_directory(work)
+                self.boundary('delete-rollback-' + key)
+        self.mark(work, 'rolled-back')
+        sync_directory(work)
 
     def prepare(self, work, name, prepared, manifest, sources, marker_bytes, link_target=None, remove_marker=False):
         dest = self.g['local'](os.path.join(self.g['PLUGIN_SRC'], name))
@@ -183,16 +356,29 @@ class Transactions:
 
     def recover(self, work):
         operation = os.path.basename(work)
-        if self.path(operation) != work:
+        if os.path.normcase(os.path.normpath(self.locate(operation))) != os.path.normcase(os.path.normpath(work)):
             raise ValueError('插件事务目录无效')
+        if os.path.normcase(os.path.normpath(os.path.dirname(work))) == os.path.normcase(os.path.normpath(os.path.join(self.directory, 'completed'))):
+            if self.marker(work, 'committed') != self.marker(work, 'rolled-back'):
+                plan_file = os.path.join(work, 'plan.json')
+                if self.state(plan_file)['kind'] != 'file':
+                    raise ValueError('插件完成历史计划类型异常，原件已保留')
+                plan = self.g['read_json'](plan_file, {})
+                if plan.get('id') != operation or plan.get('format') not in (1, 2, 3):
+                    raise ValueError('插件完成历史计划无效，原件已保留')
+                return
+            raise ValueError('插件完成历史终态异常，原件已保留')
         if self.marker(work, 'committed') or self.marker(work, 'rolled-back'):
             return
         plan_file = os.path.join(work, 'plan.json')
         if self.state(plan_file)['kind'] != 'file':
             raise ValueError('插件事务记录类型异常')
         plan = self.g['read_json'](plan_file, {})
-        if plan.get('format') not in (1, 2) or plan.get('id') != operation or not self.g['builtin'].valid_name(plan.get('name')):
+        if plan.get('format') not in (1, 2, 3) or plan.get('id') != operation or not self.g['builtin'].valid_name(plan.get('name')):
             raise ValueError('插件事务记录无效，原件已保留')
+        if plan['format'] == 3:
+            self.recover_delete(work, plan)
+            return
         name = plan['name']; targets = self.targets(name)
         if plan['format'] == 1:
             targets.pop('activation')  # 历史三文件日志只恢复它实际记录的范围。
@@ -256,6 +442,7 @@ class Transactions:
         with self.g['builtin'].operation_lock(self.g['check_cancel']):
             for work in self.pending():
                 self.recover(work)
+            self.archive_terminal()
 
     def boundary(self, name):
         # 仅隔离夹具可以暂停在持久化边界，由测试父进程真正强杀。

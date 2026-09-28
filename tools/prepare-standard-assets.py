@@ -11,6 +11,7 @@ from pathlib import Path
 import shutil
 import tarfile
 import importlib.util
+from generated_asset_directory import prune as prune_generated
 
 GLOBAL_PACKAGE_ALIASES = {
     '@deepseek-ai/dsh-workflow-worker-thread': '@deepseek-ai/dsh-workflow-ptc',
@@ -89,19 +90,27 @@ def main():
     parser.add_argument("--source", required=True)
     parser.add_argument("--output", required=True)
     args = parser.parse_args()
-    source, output = Path(args.source).resolve(), Path(args.output).resolve()
+    source, output = Path(args.source).resolve(), Path(args.output).absolute()
     if source == output or source in output.parents:
         raise ValueError("生成目录不能放在原始资产目录内")
-    output.mkdir(parents=True, exist_ok=True)
     rootfs = source / "offline-rootfs.bin"
     runtime = source / "dsh-runtime.bin"
     excluded = {"offline-rootfs.bin", "runtime-python/python-runtime.tgz",
                 "glibc-python.tar.gz", "adb-wheels.tar.gz", "dsh-runtime.bin", "dsh-runtime.inputs.json", "ubuntu-tools.inputs.json"}
+    selected = []
     for path in source.rglob("*"):
         relative = path.relative_to(source)
         if not path.is_file() or "__pycache__" in relative.parts or path.suffix == ".pyc" \
                 or relative.parts[0] == "runtime-python" or relative.as_posix() in excluded:
             continue
+        selected.append((path, relative))
+    expected = {relative.as_posix() for _, relative in selected}
+    expected.update({"web-integration/gecko-compat.js", "glibc-python.bin", "adb-wheels.bin"})
+    if rootfs.is_file():
+        expected.update({"offline-rootfs.bin", "offline-rootfs.bytes", "offline-rootfs.sha256",
+                         "offline-rootfs.layout", "dsh-runtime.bin", "dsh-runtime.sha256"})
+    prune_generated(output, expected)
+    for path, relative in selected:
         destination = output / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(path, destination)

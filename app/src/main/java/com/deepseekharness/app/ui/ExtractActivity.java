@@ -55,6 +55,11 @@ public class ExtractActivity extends AppCompatActivity {
         format.setBackgroundResource(R.drawable.bg_action_plain);format.setTextColor(getColor(R.color.err));format.setTextSize(13);format.setAllCaps(false);
         content.addView(retry, new LinearLayout.LayoutParams(-1, -2));
         content.addView(enter, new LinearLayout.LayoutParams(-1, -2));
+        Button emergency = new androidx.appcompat.widget.AppCompatButton(this);
+        emergency.setText(com.deepseekharness.app.util.UiText.choose("启动应急 DSH", "Start emergency DSH"));
+        emergency.setBackgroundResource(R.drawable.bg_btn);emergency.setTextColor(getColorStateList(R.color.button_text));emergency.setTextSize(15);emergency.setAllCaps(false);
+        emergency.setOnClickListener(v -> startActivity(new Intent(this,RecoveryActivity.class)));
+        content.addView(emergency,new LinearLayout.LayoutParams(-1,-2));
         Button logs = new androidx.appcompat.widget.AppCompatButton(this);
         logs.setText(com.deepseekharness.app.util.UiText.choose("查看本次维护记录", "View maintenance record"));
         logs.setOnClickListener(v -> startActivity(DiagnosticActivity.downloadLogs(this)));

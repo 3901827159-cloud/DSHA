@@ -25,13 +25,41 @@ test('已鉴权但方法错误的请求仍不能删除会话',async()=>{
   assert.equal(code,405);assert.equal(f.checked,1);assert.equal(f.consulted,0);
 });
 
-for(const value of ['null','[]','true','"x"','{bad',JSON.stringify({sessionId:'x'.repeat(5000)})])
+for(const value of ['null','[]','true','"x"','{bad'])
   test(`非法删除正文保持结构化错误：${value.slice(0,20)}`,async()=>{
     const f=fixture(undefined);let code,body;
     const req=Readable.from([value]);req.method='POST';
+    req.headers={host:'127.0.0.1:3080',origin:'http://127.0.0.1:3080'};
     await f.handler(req,{writeHead:status=>code=status,end:text=>body=JSON.parse(text)});
     assert.equal(code,400);assert.equal(body.error.code,'invalid-body');assert.equal(f.consulted,0);
   });
+
+for(const origin of [undefined,'','http://127.0.0.1:3080'])
+  test(`Host鉴权通过后允许同源或非浏览器请求：${origin??'无Origin'}`,async()=>{
+    const f=fixture(undefined);let code,body;
+    const req=Readable.from(['null']);req.method='POST';req.headers={host:'127.0.0.1:3080',origin};
+    await f.handler(req,{writeHead:status=>code=status,end:text=>body=JSON.parse(text)});
+    assert.equal(code,400);assert.equal(body.error.code,'invalid-body');assert.equal(f.checked,1);assert.equal(f.consulted,0);
+  });
+
+for(const origin of ['http://evil.example','http://127.0.0.1:3081','null','invalid://'])
+  test(`Origin拒绝跨域/畸形来源且不读取正文：${origin}`,async()=>{
+    const f=fixture(undefined);let code,body;
+    const req={method:'POST',headers:{host:'127.0.0.1:3080',origin},setEncoding(){throw Error('不得读取正文');}};
+    await f.handler(req,{writeHead:status=>code=status,end:text=>body=JSON.parse(text)});
+    assert.equal(code,403);assert.equal(body.error.code,'cross-origin');assert.equal(f.checked,1);assert.equal(f.consulted,0);
+  });
+
+for(const [name,value,status,error] of [
+  ['精确1MiB', '"'+'x'.repeat(1_048_574)+'"',400,'invalid-body'],
+  ['超过1MiB', '"'+'x'.repeat(1_048_575)+'"',413,'payload-too-large'],
+  ['多字节超过1MiB','"'+'中'.repeat(349_526)+'"',413,'payload-too-large'],
+]) test(`删除正文按真实字节限制：${name}`,async()=>{
+  const f=fixture(undefined);let code,body;
+  const req=Readable.from([value]);req.method='POST';req.headers={host:'127.0.0.1:3080'};
+  await f.handler(req,{writeHead:status=>code=status,end:text=>body=JSON.parse(text)});
+  assert.equal(code,status);assert.equal(body.error.code,error);assert.equal(f.checked,1);assert.equal(f.consulted,0);
+});
 test('移动 UI 模块对 0.1.7 Host 声明实际服务依赖',()=>{
   let plugin;
   vm.runInNewContext(readFileSync('app/src/main/assets/builtin-plugins/dsh-web-mobile/lib/client.js','utf8'),

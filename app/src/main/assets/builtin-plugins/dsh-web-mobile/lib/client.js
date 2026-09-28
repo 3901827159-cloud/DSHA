@@ -94,7 +94,7 @@ exports.markGestureConsumed = markGestureConsumed;
 exports.consumeIfGestured = consumeIfGestured;
 exports.isGestureConsumed = isGestureConsumed;
 /** Marked targets with their expiry timestamp (monotonic performance.now). */
-const consumed = new Map();
+const consumed = new WeakMap();
 /**
  * True while the live stroke is axis-locked horizontal. Unlike the consume
  * marks (written at the gesture layer's OWN pointerup, after
@@ -139,6 +139,7 @@ function isElementLike(value) {
 function markGestureConsumed(target, windowMs, upTo) {
     const until = performance.now() + windowMs;
     if (!isElementLike(target)) {
+        if ((typeof target !== 'object' && typeof target !== 'function') || target === null) return;
         consumed.set(target, until);
         return;
     }
@@ -159,11 +160,14 @@ function consumeIfGestured(event) {
     const now = performance.now();
     const target = event.target;
     if (!isElementLike(target)) {
-        for (const [t, until] of consumed) {
-            if (until <= now)
-                consumed.delete(t);
+        if ((typeof target !== 'object' && typeof target !== 'function') || target === null) return false;
+        const until = consumed.get(target);
+        if (until === undefined) return false;
+        if (until <= now) {
+            consumed.delete(target);
+            return false;
         }
-        return false;
+        return true;
     }
     let el = target;
     while (el !== null) {
@@ -2650,7 +2654,7 @@ function installSidebarSwipe(ctx, filesToggle) {
 __modules["effects/phone-chrome.js"] = function (require, module, exports) {
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.TAP_CLOSE_NAV_SELECTOR = exports.TOUCH_QUERY = exports.DESKTOP_QUERY = exports.MOBILE_QUERY = void 0;
+exports.TAP_CLOSE_NAV_SELECTOR = exports.STABLE_VIEWPORT_VAR = exports.TOUCH_QUERY = exports.DESKTOP_QUERY = exports.MOBILE_QUERY = void 0;
 exports.installMobileEffect = installMobileEffect;
 exports.findFrame = findFrame;
 exports.getFrame = getFrame;
@@ -2660,6 +2664,7 @@ exports.installReconciler = installReconciler;
 exports.addReconcilerTask = addReconcilerTask;
 exports.detectIosWebKit = detectIosWebKit;
 exports.installPhoneChrome = installPhoneChrome;
+exports.toggleDrawer = toggleDrawer;
 exports.installOverlayInteractions = installOverlayInteractions;
 exports.registerReconcileTasks = registerReconcileTasks;
 const gesture_guard_ts_1 = require("./effects/gesture-guard.js");
@@ -2870,8 +2875,7 @@ function installReconciler(ctx) {
         const observer = new MutationObserver((records) => {
             const keys = new Set();
             for (const record of records) {
-                // 历史消息/工具输出不改变 shell、composer 或侧栏结构；不唤醒整组移动布局任务。
-                // flow 的插入/移除由外层 childList 仍可见，预览 portal 在 flow 外也继续观察。
+                // 历史消息和流式文本不改变 shell；flow 外的插入仍可唤醒布局。
                 const target = record.target instanceof Element ? record.target : record.target.parentElement;
                 if (target?.closest('[data-chat-flow]')) continue;
                 keys.add(record.type === 'attributes' && record.attributeName !== null ? record.attributeName : '*');
@@ -2948,6 +2952,13 @@ const IOS_MARKER = 'data-mobile-nav-ios';
  * floor (data-mobile-nav-ios), not a zoom ban (#45).
  */
 const VIEWPORT_CONTENT = 'width=device-width, initial-scale=1, viewport-fit=cover';
+/**
+ * CSS custom property carrying the viewport height WITHOUT the soft keyboard
+ * (px), maintained by the viewport effect below. Mobile cards that must not
+ * move when the keyboard appears size themselves with it instead of a viewport
+ * unit — see the settings sheet / shortcut card rules in layout.css.ts.
+ */
+exports.STABLE_VIEWPORT_VAR = '--dsh-web-mobile-vh';
 const findViewportMeta = () => document.querySelector('meta[name="viewport"]');
 /**
  * Phone chrome: KEEP the system status bar (no fullscreen) and make it
@@ -3033,7 +3044,50 @@ function installPhoneChrome(ctx) {
         themeMeta.content = bodyBg();
         if (themeMeta.parentElement === null)
             document.head.appendChild(themeMeta);
+        // The keyboard-less viewport height (STABLE_VIEWPORT_VAR).
+        //
+        // Measured 2026-09-25 on the reporter's phone (Android 16 WebView,
+        // adjustResize): raising the soft keyboard takes the layout viewport from
+        // 754 to 471, and vh / svh / lvh / dvh ALL follow it (all four measured at
+        // 471) — no CSS unit on this engine can ignore the keyboard. So every card
+        // sized by a viewport unit shrank with it: the settings sheet and the
+        // shortcut modal each collapsed a step, which is the reporter's 「又闪一下」
+        // when they tapped the search field; the previous release's .2s max-height
+        // transition only turned that step into a 150ms slow-motion lurch.
+        //
+        // The keyboard changes height but NOT width, so the height is tracked on a
+        // monotonic rule: update only when it grows, or when the width changes
+        // (rotation / real window resize). The value therefore stays at the
+        // keyboard-less height, the two cards keep their size when the keyboard
+        // appears. DSHA also caps cards with the current visible viewport: deliberate
+        // keyboard input and same-width split-screen resizing must keep all actions
+        // reachable. No keyboard-padding implementation is assumed here.
+        let stableVh = 0;
+        let stableWidth = 0;
+        const syncStableViewport = () => {
+            const height = window.innerHeight;
+            const width = window.innerWidth;
+            const visible = window.visualViewport;
+            const available = Math.max(1, Math.min(height, visible?.height ?? height));
+            root.style.setProperty('--dsha-mobile-visible-vh', `${available}px`);
+            root.style.setProperty('--dsha-mobile-viewport-top', `${visible?.offsetTop ?? 0}px`);
+            if (stableVh === 0 || height > stableVh || width !== stableWidth) {
+                stableVh = height;
+                stableWidth = width;
+                root.style.setProperty(exports.STABLE_VIEWPORT_VAR, `${height}px`);
+            }
+        };
+        syncStableViewport();
+        window.addEventListener('resize', syncStableViewport);
+        window.visualViewport?.addEventListener('resize', syncStableViewport);
+        window.visualViewport?.addEventListener('scroll', syncStableViewport);
         return () => {
+            window.removeEventListener('resize', syncStableViewport);
+            window.visualViewport?.removeEventListener('resize', syncStableViewport);
+            window.visualViewport?.removeEventListener('scroll', syncStableViewport);
+            root.style.removeProperty('--dsha-mobile-visible-vh');
+            root.style.removeProperty('--dsha-mobile-viewport-top');
+            root.style.removeProperty(exports.STABLE_VIEWPORT_VAR);
             metaObserver.disconnect();
             headObserver.disconnect();
             observer.disconnect();
@@ -3065,6 +3119,25 @@ function installPhoneChrome(ctx) {
  * did nothing but retract the drawer, 2026-09-13).
  */
 exports.TAP_CLOSE_NAV_SELECTOR = 'button[data-dsh-taskboard-entry], button[data-dsh-ssh-entry], [class*="newSession"], [class*="sessionRow"], [class*="searchResultRow"], [class*="searchResultWorkspace"], [class*="panelRow"]';
+/**
+ * The one drawer toggle every non-gesture entry point shares: a CLOSE animates
+ * into the closed slot and flips the host marker only once it has landed
+ * (closeDrawerAnimated's late commit — spec 2026-08-27), an OPEN stays a plain
+ * toggle so the host's own .28s transform transition plays.
+ *
+ * Load-bearing for layering, not just for looks (2026-09-25): the popover
+ * band's modal-root raise is gated on our backdrop being on screen, and the
+ * backdrop outlives the marker flip by design (fade .2s + removal 260ms). A
+ * closer that flips the marker while the column is still painted therefore
+ * leaves an open modal under the drawer band for the length of the
+ * transition — that is the 快捷键弹层「抽搐/闪」 root cause. Routing every
+ * closer through here removes the window at the source instead of relying on
+ * the band to cover it.
+ */
+function toggleDrawer(ctx) {
+    if (!(0, sidebar_swipe_ts_1.closeDrawerAnimated)(ctx))
+        ctx.layout.toggleSidebar();
+}
 function installOverlayInteractions(ctx) {
     installMobileEffect(ctx, 'dsh-web-mobile: drawer close (Escape + navigate)', () => {
         // Every non-gesture close funnels through here (backdrop tap, Escape, the
@@ -3073,8 +3146,7 @@ function installOverlayInteractions(ctx) {
         // land before it (closeDrawerAnimated) - while opening stays a plain toggle
         // so the host's own .28s transform transition plays.
         const toggleSidebar = () => {
-            if (!(0, sidebar_swipe_ts_1.closeDrawerAnimated)(ctx))
-                ctx.layout.toggleSidebar();
+            toggleDrawer(ctx);
         };
         const drawerOpen = () => {
             const frame = getFrame();
@@ -3511,7 +3583,7 @@ function registerReconcileTasks(ctx, panelExit) {
         addReconcilerTask((0, aionui_compat_ts_1.createPreviewCloseTask)()),
         addReconcilerTask((0, aionui_compat_ts_1.createSheetRiseTask)()),
         addReconcilerTask((0, stats_line_ts_1.createStatsLineTask)()),
-        addReconcilerTask((0, overlay_backdrop_fab_ts_1.createOverlayTask)(t, () => ctx.layout.toggleSidebar(), panelExit)),
+        addReconcilerTask((0, overlay_backdrop_fab_ts_1.createOverlayTask)(t, () => toggleDrawer(ctx), panelExit)),
         addReconcilerTask(panelExit.task),
         addReconcilerTask((0, file_viewer_compat_ts_1.createFileViewerMarkerTask)()),
     ];
@@ -3863,12 +3935,27 @@ exports.BASE_CSS = `
      matches. Do not reintroduce a hash here without re-measuring.
      Measured 2026-09-19: with the drawer open (column z 1300) the workspace
      Rename dialog sat entirely under it and needed the drawer closed first.
-     Raise the portal root, not the dialog, and only while the drawer is open —
-     the closed-drawer and desktop stacks keep the host's own ordering. Our
-     own delete backdrop matches this rule too since the 2026-09-24 centered
-     rework (its direct child card carries role=dialog) — harmlessly: it sets
-     the same 1400 the dedicated rule below sets. */
-  body:has([data-mobile-nav="frame"]:not([data-sidebar-collapsed]))
+     Raise the portal root, not the dialog.
+     GATE (2026-09-25, real device): the gate is OUR BACKDROP'S PRESENCE, not
+     the drawer-open marker. Marker and paint disagree for the whole close
+     transition — the backdrop fades over .2s and is removed 260ms after the
+     marker flips (overlay-backdrop-fab.ts), the column transitions .28s
+     (layout.css.ts) and React swaps the pane subtree ~200ms late — so a
+     marker-gated raise went dark inside that window and the drawer band
+     covered any open modal. Measured on the reporter's phone (Android 16
+     WebView) with the shortcut modal open: forcing data-sidebar-collapsed
+     dropped this root 1400 -> 1000 and made elementsFromPoint(0.85w, .30h)
+     return [data-mobile-nav="backdrop"] — rgba(0,0,0,.45) over the modal's
+     white = luminance 141, matching the reporter's recording (140 behind a
+     280px drawer edge). That is the "快捷键弹层抽搐/闪" report: a ~200-280ms
+     dark frame with the drawer over the shortcut modal, not a compositing
+     tear. The backdrop's presence IS the drawing condition, so gating on it
+     has no such window; with no backdrop the host's own ordering stands (a
+     menu opened inside a modal still sorts above it). Our own delete backdrop
+     matches this rule too since the 2026-09-24 centered rework (its direct
+     child card carries role=dialog) — harmlessly: it sets the same 1400 the
+     dedicated rule below sets. */
+  body:has([data-mobile-nav="backdrop"])
     > div:has(> [role="dialog"][aria-modal="true"]) {
     z-index: 1400 !important;
   }
@@ -3994,14 +4081,15 @@ exports.BASE_CSS = `
   }
 }
 /* Settings sheet entrance: the official dialog mounts with no animation at
-   all, so it snaps in. Fade + slight rise/scale reads as a proper sheet. */
+   all, so it snaps in. A slight rise/scale reads as a proper sheet.
+   No opacity arm (issue #124, 2026-09-25): checker scene 4 screencast caught
+   the fade double-exposing the still-open drawer underneath the panel
+   (frame a005) — sliding in fully opaque keeps the motion, drops the bleed. */
 @keyframes dsh-web-mobile-sheet-in {
   from {
-    opacity: 0;
     transform: translateY(14px) scale(.98);
   }
   to {
-    opacity: 1;
     transform: none;
   }
 }
@@ -5677,6 +5765,18 @@ exports.LAYOUT_CSS = `/* ---------- mobile-only layout (narrow viewport AND touc
     flex: 0 1 auto !important;
     min-width: 28px !important;
   }
+  /* 团队 chip 图标在「标准模式」与文件按钮之间居中（2026-09-26 用户拍板）。
+     真机 360px / dpr 4 实测（无障碍盒 = 绘制盒）：标准模式 205..274、团队 chip
+     278..306、文件按钮 316..352 —— 左缝 4、右缝 10，盒心 292 落在区间心 295 左侧。
+     只做绘制层位移（宿主 .VoX2oq_root 本来就是 position:relative，不新增包含块、
+     也不动它自己的弹层锚定），布局一个像素不变：46px 承重预留保持原样（见
+     pitfalls「header 拥挤」），文件按钮不会被压。位移后两缝 7/7，图标正好居中。
+     只在真·手机档生效：768–1023 平板档排布不同，不套这台手机的魔数。 */
+  @media (max-width: 767px) and (pointer: coarse) {
+    [data-mobile-nav="frame"] [data-phase] header:has([class*="_headerLeading"]) [data-team-action][class*="_root"] {
+      left: 3px !important;
+    }
+  }
   [data-mobile-nav="frame"] [data-phase] header:has([class*="_headerLeading"]) [class*="_headerActions"] [class*="QsffPG_root"] {
     position: absolute !important;
     right: 8px !important;
@@ -5996,8 +6096,25 @@ exports.LAYOUT_CSS = `/* ---------- mobile-only layout (narrow viewport AND touc
      (with the path input) is hidden by the > :first-child > :first-child
      display:none rule below, and the user can no longer type a path
      (issue #12, 2026-08-16). The picker family keeps the official layout
-     on mobile in every mode. */
-  [aria-modal="true"]:has(> :first-child > :last-child > button):not(:has([role="navigation"])):not(:has([class*="ZuhsRW"])) {
+     on mobile in every mode.
+
+     The keyboard-shortcut modal (dsh-client-ui-shortcuts, the same
+     primitives Modal → data-shortcut-modal="shortcuts") needs the same
+     exclusion for the same class of reason: its first child is the
+     CONTENT column (nhfO0a_contents = header + search row + list +
+     footer), not a nav row, and its footer holds <button> children, so
+     the family predicate matched it and the sheet rules transposed the
+     whole dialog — measured 2026-09-25 at 390px: the
+     > :first-child { flex-direction: row } rule laid search row / list /
+     footer SIDE BY SIDE (x=20 / 118 / 278, list 1296px tall, spilling
+     far outside the sheet), and > :first-child > :first-child
+     { display: none } swallowed the 「快捷键」 title together with its
+     close button (owner report). The host tags every modal of this
+     family: data-shortcut-modal="settings" on the settings sheet,
+     "shortcuts" on this one — gating on that attribute (not on a hashed
+     class) keeps the official centered card, the same treatment the
+     export dialog gets. */
+  [aria-modal="true"]:has(> :first-child > :last-child > button):not(:has([role="navigation"])):not(:has([class*="ZuhsRW"])):not([data-shortcut-modal="shortcuts"]) {
     position: absolute !important;
     left: 8px !important;
     /* Fixed top (no translateY): a transform on the panel combined with the
@@ -6008,23 +6125,32 @@ exports.LAYOUT_CSS = `/* ---------- mobile-only layout (narrow viewport AND touc
     width: calc(100vw - 16px);
     max-width: calc(100vw - 16px);
     /* Height follows the content (no dead space under a short page); it
-       caps at 100dvh-24 (less the safe-area top) and the options area
-       scrolls only then. */
+       caps at the KEYBOARD-LESS viewport height minus 24 (less the safe-area
+       top) and the options area scrolls only then. STABLE_VIEWPORT_VAR, not
+       100dvh: measured 2026-09-25 on Android 16 WebView (adjustResize), the
+       soft keyboard takes the layout viewport 754 -> 471 and vh / svh / lvh /
+       dvh all follow it, so a dvh-sized sheet collapses a step the moment the
+       shortcut modal's search field raises the keyboard — the reporter's
+       「又闪一下」. The variable never moves for the keyboard, so the sheet
+       keeps its size and the keyboard covers its lower half instead. */
     height: auto;
     max-height: min(800px, calc(100vh - 24px - env(safe-area-inset-top, 0px)));
-    max-height: min(800px, calc(100dvh - 24px - env(safe-area-inset-top, 0px)));
+    max-height: min(800px, calc(var(--dsh-web-mobile-vh, 100dvh) - 24px - env(safe-area-inset-top, 0px)));
+    /* Only a real viewport change (rotation / window resize) reaches this now,
+       so the short transition reads as a slide instead of a jump. */
+    transition: max-height .2s var(--ds-ease-out, ease-in-out);
     flex-direction: column !important;
     border-radius: 14px !important;
     animation: dsh-web-mobile-sheet-in .22s var(--ds-ease-out, ease-in-out);
   }
   /* The settings sheet's dimmed mask fades in with the panel (the mask is
      the first child of the overlay that directly contains the sheet). */
-  :has(> [aria-modal="true"]:has(> :first-child > :last-child > button):not(:has([role="navigation"])):not(:has([class*="ZuhsRW"]))) > :first-child {
+  :has(> [aria-modal="true"]:has(> :first-child > :last-child > button):not(:has([role="navigation"])):not(:has([class*="ZuhsRW"])):not([data-shortcut-modal="shortcuts"])) > :first-child {
     animation: dsh-web-mobile-fade .18s var(--ds-ease-out, ease-in-out);
   }
   @media (prefers-reduced-motion: reduce) {
-    [aria-modal="true"]:has(> :first-child > :last-child > button):not(:has([role="navigation"])):not(:has([class*="ZuhsRW"])),
-    :has(> [aria-modal="true"]:has(> :first-child > :last-child > button):not(:has([role="navigation"])):not(:has([class*="ZuhsRW"]))) > :first-child {
+    [aria-modal="true"]:has(> :first-child > :last-child > button):not(:has([role="navigation"])):not(:has([class*="ZuhsRW"])):not([data-shortcut-modal="shortcuts"]),
+    :has(> [aria-modal="true"]:has(> :first-child > :last-child > button):not(:has([role="navigation"])):not(:has([class*="ZuhsRW"])):not([data-shortcut-modal="shortcuts"])) > :first-child {
       animation: none !important;
     }
   }
@@ -6036,14 +6162,14 @@ exports.LAYOUT_CSS = `/* ---------- mobile-only layout (narrow viewport AND touc
   /* Nav bar: hide the "Settings" caption (redundant on a full-width sheet)
      and wrap the tab list so every tab is visible — a horizontal scroll cut
      the last tab ("Plugins") off with no affordance to scroll. */
-  [aria-modal="true"]:has(> :first-child > :last-child > button):not(:has([role="navigation"])):not(:has([class*="ZuhsRW"])) > :first-child {
+  [aria-modal="true"]:has(> :first-child > :last-child > button):not(:has([role="navigation"])):not(:has([class*="ZuhsRW"])):not([data-shortcut-modal="shortcuts"]) > :first-child {
     width: 100%;
     flex-direction: row !important;
     align-items: center;
     gap: 6px;
     padding: 10px 12px 8px;
   }
-  [aria-modal="true"]:has(> :first-child > :last-child > button):not(:has([role="navigation"])):not(:has([class*="ZuhsRW"])) > :first-child > :first-child {
+  [aria-modal="true"]:has(> :first-child > :last-child > button):not(:has([role="navigation"])):not(:has([class*="ZuhsRW"])):not([data-shortcut-modal="shortcuts"]) > :first-child > :first-child {
     display: none !important;
   }
   /* The tab strip stays clear of the toolbar: the toolbar (the close ✕ on
@@ -6070,7 +6196,7 @@ exports.LAYOUT_CSS = `/* ---------- mobile-only layout (narrow viewport AND touc
      2026-09-24) reproduces the reparent-era scroller geometry (its box
      ended 6px short of the toolbar). The strip must be anchored by its
      class. */
-  [aria-modal="true"]:has(> :first-child > :last-child > button):not(:has([role="navigation"])):not(:has([class*="ZuhsRW"])) > :first-child [class*="_navList"] {
+  [aria-modal="true"]:has(> :first-child > :last-child > button):not(:has([role="navigation"])):not(:has([class*="ZuhsRW"])):not([data-shortcut-modal="shortcuts"]) > :first-child [class*="_navList"] {
     flex: 1 1 auto;
     min-width: 0;
     flex-direction: row !important;
@@ -6086,20 +6212,20 @@ exports.LAYOUT_CSS = `/* ---------- mobile-only layout (narrow viewport AND touc
      reads fat on a phone; 2px keeps the scroll affordance without the
      bulk. (Portal-aware copies of the frame-scoped rules in compat.css,
      which died with the rc.2 portal move.) */
-  [aria-modal="true"]:has(> :first-child > :last-child > button):not(:has([role="navigation"])):not(:has([class*="ZuhsRW"])) > :first-child [class*="_navList"]::-webkit-scrollbar {
+  [aria-modal="true"]:has(> :first-child > :last-child > button):not(:has([role="navigation"])):not(:has([class*="ZuhsRW"])):not([data-shortcut-modal="shortcuts"]) > :first-child [class*="_navList"]::-webkit-scrollbar {
     height: 2px !important;
   }
-  [aria-modal="true"]:has(> :first-child > :last-child > button):not(:has([role="navigation"])):not(:has([class*="ZuhsRW"])) > :first-child [class*="_navList"]::-webkit-scrollbar-thumb {
+  [aria-modal="true"]:has(> :first-child > :last-child > button):not(:has([role="navigation"])):not(:has([class*="ZuhsRW"])):not([data-shortcut-modal="shortcuts"]) > :first-child [class*="_navList"]::-webkit-scrollbar-thumb {
     background: var(--dsw-alias-border-l2, rgba(0, 0, 0, .22)) !important;
     border-radius: 1px !important;
   }
-  [aria-modal="true"]:has(> :first-child > :last-child > button):not(:has([role="navigation"])):not(:has([class*="ZuhsRW"])) > :first-child [class*="_navList"]::-webkit-scrollbar-track {
+  [aria-modal="true"]:has(> :first-child > :last-child > button):not(:has([role="navigation"])):not(:has([class*="ZuhsRW"])):not([data-shortcut-modal="shortcuts"]) > :first-child [class*="_navList"]::-webkit-scrollbar-track {
     background: transparent !important;
   }
   /* Cells stay whole inside the scroller: no shrink, no wrap, compact
      metrics. (Portal-aware copies of the frame-scoped rules in compat.css,
      which died with the rc.2 portal move.) */
-  [aria-modal="true"]:has(> :first-child > :last-child > button):not(:has([role="navigation"])):not(:has([class*="ZuhsRW"])) > :first-child [class*="_navCell"] {
+  [aria-modal="true"]:has(> :first-child > :last-child > button):not(:has([role="navigation"])):not(:has([class*="ZuhsRW"])):not([data-shortcut-modal="shortcuts"]) > :first-child [class*="_navCell"] {
     flex: 0 0 auto !important;
     white-space: nowrap !important;
     padding: 6px 8px !important;
@@ -6107,7 +6233,7 @@ exports.LAYOUT_CSS = `/* ---------- mobile-only layout (narrow viewport AND touc
     font-size: 13px !important;
     justify-content: flex-start !important;
   }
-  [aria-modal="true"]:has(> :first-child > :last-child > button):not(:has([role="navigation"])):not(:has([class*="ZuhsRW"])) > :first-child [class*="_navCell"] svg {
+  [aria-modal="true"]:has(> :first-child > :last-child > button):not(:has([role="navigation"])):not(:has([class*="ZuhsRW"])):not([data-shortcut-modal="shortcuts"]) > :first-child [class*="_navCell"] svg {
     width: 14px !important;
     height: 14px !important;
     flex: none !important;
@@ -6141,7 +6267,7 @@ exports.LAYOUT_CSS = `/* ---------- mobile-only layout (narrow viewport AND touc
      settings-toolbar-reparent task. Card headers live deeper — inside
      the options scroll area — and match neither, so no per-plugin hash
      guards are needed. */
-  [aria-modal="true"]:has(> :first-child > :last-child > button):not(:has([role="navigation"])):not(:has([class*="ZuhsRW"])) > :last-child > [class*="_header"]:not([class*="_headerActions"]) {
+  [aria-modal="true"]:has(> :first-child > :last-child > button):not(:has([role="navigation"])):not(:has([class*="ZuhsRW"])):not([data-shortcut-modal="shortcuts"]) > :last-child > [class*="_header"]:not([class*="_headerActions"]) {
     position: absolute;
     top: 10px;
     right: 12px;
@@ -6172,11 +6298,11 @@ exports.LAYOUT_CSS = `/* ---------- mobile-only layout (narrow viewport AND touc
     height: 32px;
     min-height: 32px;
   }
-  [aria-modal="true"]:has(> :first-child > :last-child > button):not(:has([role="navigation"])):not(:has([class*="ZuhsRW"])) > :last-child > [class*="_header"]:not([class*="_headerActions"]) > * {
+  [aria-modal="true"]:has(> :first-child > :last-child > button):not(:has([role="navigation"])):not(:has([class*="ZuhsRW"])):not([data-shortcut-modal="shortcuts"]) > :last-child > [class*="_header"]:not([class*="_headerActions"]) > * {
     margin-left: 0 !important;
     margin-right: 0 !important;
   }
-  [aria-modal="true"]:has(> :first-child > :last-child > button):not(:has([role="navigation"])):not(:has([class*="ZuhsRW"])) > :last-child > [class*="_header"]:not([class*="_headerActions"]) > :last-child {
+  [aria-modal="true"]:has(> :first-child > :last-child > button):not(:has([role="navigation"])):not(:has([class*="ZuhsRW"])):not([data-shortcut-modal="shortcuts"]) > :last-child > [class*="_header"]:not([class*="_headerActions"]) > :last-child {
     position: relative;
     width: 32px;
     height: 32px;
@@ -6194,7 +6320,7 @@ exports.LAYOUT_CSS = `/* ---------- mobile-only layout (narrow viewport AND touc
      button starts ~13px under the ✕'s bottom edge and must keep its own
      top-right corner. Anchored to the button (position:relative above),
      so the extension travels with the pinned toolbar. */
-  [aria-modal="true"]:has(> :first-child > :last-child > button):not(:has([role="navigation"])):not(:has([class*="ZuhsRW"])) > :last-child > [class*="_header"]:not([class*="_headerActions"]) > :last-child::after {
+  [aria-modal="true"]:has(> :first-child > :last-child > button):not(:has([role="navigation"])):not(:has([class*="ZuhsRW"])):not([data-shortcut-modal="shortcuts"]) > :last-child > [class*="_header"]:not([class*="_headerActions"]) > :last-child::after {
     content: "";
     position: absolute;
     inset: -6px -6px 0 -6px;
@@ -6211,7 +6337,7 @@ exports.LAYOUT_CSS = `/* ---------- mobile-only layout (narrow viewport AND touc
      Desktop keeps the button: this whole block sits inside the mobile
      media wrapper. (Portal-aware replacement for the frame-scoped rule in
      compat.css, which died with the rc.2 portal move.) */
-  [aria-modal="true"]:has(> :first-child > :last-child > button):not(:has([role="navigation"])):not(:has([class*="ZuhsRW"])) > :last-child > [class*="_header"]:not([class*="_headerActions"]) [class*="_actions"] {
+  [aria-modal="true"]:has(> :first-child > :last-child > button):not(:has([role="navigation"])):not(:has([class*="ZuhsRW"])):not([data-shortcut-modal="shortcuts"]) > :last-child > [class*="_header"]:not([class*="_headerActions"]) [class*="_actions"] {
     display: none !important;
   }
   /* Appearance mode cards: the official cube row renders three tall
@@ -6232,11 +6358,11 @@ exports.LAYOUT_CSS = `/* ---------- mobile-only layout (narrow viewport AND touc
   }
   /* Content: the options scroll area gets bottom breathing room so the last
      row never sits flush against the sheet's rounded corner. */
-  [aria-modal="true"]:has(> :first-child > :last-child > button):not(:has([role="navigation"])):not(:has([class*="ZuhsRW"])) > :last-child {
+  [aria-modal="true"]:has(> :first-child > :last-child > button):not(:has([role="navigation"])):not(:has([class*="ZuhsRW"])):not([data-shortcut-modal="shortcuts"]) > :last-child {
     flex: 1 1 auto;
     min-height: 0;
   }
-  [aria-modal="true"]:has(> :first-child > :last-child > button):not(:has([role="navigation"])):not(:has([class*="ZuhsRW"])) > :last-child > :last-child {
+  [aria-modal="true"]:has(> :first-child > :last-child > button):not(:has([role="navigation"])):not(:has([class*="ZuhsRW"])):not([data-shortcut-modal="shortcuts"]) > :last-child > :last-child {
     padding: 0 12px 24px;
   }
   /* 0.1.6-alpha.2 宿主的插件管理页（dsh-client-ui-plugin-manager 渲染的
@@ -6268,11 +6394,87 @@ exports.LAYOUT_CSS = `/* ---------- mobile-only layout (narrow viewport AND touc
     margin-left: var(--dsh-web-mobile-panel-clearance) !important;
     width: calc(100% - var(--dsh-web-mobile-panel-clearance)) !important;
   }
-  /* 详情 crumb 是被拉伸的 flex item（没有 width:100%），margin 就是对的工具。 */
+  /* 详情 crumb 是被拉伸的 flex item（没有 width:100%），margin 就是对的工具。
+     **0.1.7-rc.2 起「直子」形态落空**：宿主把 crumb 套进了 DetailTop 的根盒
+     （实测链 [data-plugin-detail] > div.X_2TxG_detailTop > button.X_2TxG_crumb），
+     于是上面三条「> button:first-child」在详情页全部 matches()=false ——
+     crumb 的 margin-left 计算值 0px，停在宿主 padding 上：盒 [24,28,342,14]、
+     自带箭头图标 [24,28,14,14]、文字 span x=44，整条压在 FAB 盒
+     [10,12,38,38]（右缘 48）里 —— 图标 14px 全遮、文字首字压 4px；
+     elementFromPoint 在图标中心与文字首字处都命中 FAB，点「返回插件列表」
+     实际触发的是 FAB 的 exit-panel（2026-09-25 报障截图同形）。
+     所以保留直子三条（旧代宿主仍走它们），再按 crumb 自己的哈希片段补三条
+     后代选择器。片段取「_crumb」：同前缀的 svg.crumbIcon 不是 button 天然排除，
+     本子树里也没有别的 crumb 家族（文件面板 ZuhsRW_crumb* 在另一棵树）。
+     实测让位后 crumb 变 [56,28,310,14] —— flex 拉伸项自己收窄 32px，无横向
+     溢出（面板 scrollWidth 恒 390），点文字可正常返回列表。 */
   [data-mobile-nav="frame"] section[data-plugin-panel] [data-plugin-detail] > button:first-child,
   [data-mobile-nav="frame"] section[data-plugin-panel] [data-plugin-item-detail] > button:first-child,
-  [data-mobile-nav="frame"] section[data-plugin-panel] [data-plugin-row-detail] > button:first-child {
+  [data-mobile-nav="frame"] section[data-plugin-panel] [data-plugin-row-detail] > button:first-child,
+  [data-mobile-nav="frame"] section[data-plugin-panel] [data-plugin-detail] button[class*="_crumb"],
+  [data-mobile-nav="frame"] section[data-plugin-panel] [data-plugin-item-detail] button[class*="_crumb"],
+  [data-mobile-nav="frame"] section[data-plugin-panel] [data-plugin-row-detail] button[class*="_crumb"] {
     margin-left: var(--dsh-web-mobile-panel-clearance) !important;
+  }
+  /* 快捷键弹层在手机上的落地形态。上面那条 :not([data-shortcut-modal="shortcuts"])
+     只是把它从设置面板家族里摘出来、还它官方的内部排版（2026-09-25 实测：纵向列
+     回来了、标题「快捷键」回来了、列表 441px 可滚、无横向溢出、docScrollWidth
+     恒 390）。但官方的外框在手机上仍会「抽搐」：宿主 Modal 的 _root 是
+     position:fixed; inset:0; align-items:center（视口居中），而弹层打开时会自动
+     聚焦搜索框（实测 activeElement = INPUT「搜索快捷键」），手机随即弹软键盘 ——
+     视口一缩，居中卡片就整体重排/回弹，肉眼即抖动。所以这里给它插件自己的「纸片」
+     几何：顶部锚定（键盘怎么变，上缘都钉在 12px）+ 与设置面板同款左缘/宽度/圆角/
+     入场动画。高度沿用宿主的 600px：nhfO0a_contents 是 flex:1 1 0%，要有一个确定的
+     高度才撑得开列表，故不改成 auto；max-height 再按视口收口，超出的部分进列表自己
+     的 scroll（_list 已是 flex:1 + min-height:0 + overflow-y:auto），与设置面板同款。
+     宿主那 30px 的 translateY 是桌面居中卡的微调，顶部锚定后必须归零。 */
+  [aria-modal="true"][data-shortcut-modal="shortcuts"] {
+    position: absolute !important;
+    left: 8px !important;
+    top: calc(env(safe-area-inset-top, 0px) + 12px) !important;
+    width: calc(100vw - 16px) !important;
+    max-width: calc(100vw - 16px) !important;
+    /* 同上：键盘不进这层的高度。这一层下面就是键盘，卡片缩一次就一定被看见，
+       所以用「不含键盘的视口高度」定高 → 点搜索框时卡片纹丝不动，键盘盖住下半截。 */
+    max-height: min(760px, calc(var(--dsh-web-mobile-vh, 100dvh) - 24px - env(safe-area-inset-top, 0px))) !important;
+    transition: max-height .2s var(--ds-ease-out, ease-in-out);
+    transform: none !important;
+    border-radius: 14px !important;
+    /* 不做透明度淡入。改动前（#124 修法二刀，2026-09-25）设置面板的
+       dsh-web-mobile-sheet-in 还带 opacity 段，而本层叠在**同样全宽全白**的
+       设置面板上，淡入的 .22s 里两层文字互相透出：CDP screencast 逐帧实拍
+       （390×844）第 10-15 帧能看到「权限/语言/外观」与「快捷键速查/新会话」
+       重影，肉眼就是「闪」。该刀后 sheet-in 已是纯滑入，不再有透明度重影的
+       机制；本层维持瞬时出现（不写 animation 会落回宿主的 _modalEnter，
+       同样是透明度淡入）；遮罩自己的淡入保留，整体仍是一次正常的弹层出现。 */
+    animation: none !important;
+  }
+  /* DSHA 保留手机搜索；首次自动聚焦由定向守卫处理，宿主节点保持原位。 */
+  /* 这一层的遮罩也在每次挂载时跑宿主的 _modalEnter（0.2s 透明度淡入）：全屏亮度在
+     0.24 档上渐变一次，肉眼看就是「全屏闪」。上一版只掐了卡片自己的动画、**故意保留**
+     了遮罩的淡入；报障人 2026-09-25 的反馈（「全屏闪」）说明那一步同样看得见。
+     这里连同卡片一起瞬时化：弹层与遮罩同帧出现、同帧消失，中间没有渐变。 */
+  :has(> [aria-modal="true"][data-shortcut-modal="shortcuts"]) > [class*="_mask"]::after {
+    animation: none !important;
+    /* 手机档这个弹层只能从设置面板里打开，而设置面板自己已经压了一层 0.24 的遮罩；
+       再叠一层就是全屏暗度 0.24 → 0.42 的一步 —— 报障人说的「全屏闪」。这一层不再
+       重复变暗：屏幕的整体明暗在弹层开合前后完全一致，剩下的变化只有卡片本身。 */
+    background: transparent !important;
+  }
+
+  /* DSHA 可见区域边界：分屏、短横屏、软键盘和 visualViewport 平移均可达。 */
+  [aria-modal="true"]:has(> :first-child > :last-child > button):not(:has([role="navigation"])):not(:has([class*="ZuhsRW"])):not([data-shortcut-modal="shortcuts"]),
+  [aria-modal="true"][data-shortcut-modal="shortcuts"] {
+    top: calc(env(safe-area-inset-top, 0px) + 12px + var(--dsha-mobile-viewport-top, 0px)) !important;
+    max-height: max(1px, calc(var(--dsha-mobile-visible-vh, 100vh) - 24px - env(safe-area-inset-top, 0px))) !important;
+    min-height: 0 !important;
+    box-sizing: border-box;
+    overflow-y: auto;
+    transition: none;
+  }
+  [aria-modal="true"][data-shortcut-modal="shortcuts"] > :first-child {
+    min-height: 0;
+    max-height: 100%;
   }
   /* ---------- sidebar panel enter / exit (see effects/panel-exit.ts) ----------
      A sidebar panel REPLACES the main area. Two motions, both short and
@@ -8249,8 +8451,12 @@ function installSessionMenuDelete(ctx) {
                 // the right follow-up after deleting the current session; on the
                 // desktop layout (wide touch) the same call would collapse the
                 // always-visible sidebar panel, so gate it on the mobile query.
+                // toggleDrawer keeps that semantics (it falls back to the plain toggle
+                // when the drawer is not open) while making the close a late commit,
+                // so the marker cannot flip while the column is still painted — the
+                // window in which the drawer band covers an open modal (2026-09-25).
                 if (wasCurrent && window.matchMedia(phone_chrome_ts_1.MOBILE_QUERY).matches)
-                    ctx.layout.toggleSidebar();
+                    (0, phone_chrome_ts_1.toggleDrawer)(ctx);
             });
             host.appendChild(backdrop);
             backdrop.appendChild(card);
@@ -9122,6 +9328,70 @@ function installModelMenuAnchor(ctx) {
     });
 }
 };
+__modules["effects/shortcut-modal-keyboard-guard.js"] = function (require, module, exports) {
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.installShortcutModalKeyboardGuard = installShortcutModalKeyboardGuard;
+const phone_chrome = require("./effects/phone-chrome.js");
+
+// DSHA：只抑制 rc2 首次挂载期间的自动搜索聚焦。原生触摸、Tab、读屏和后续
+// focus 请求保留；弹层本身获得焦点，以便 Escape/Tab 和读屏仍拥有正确上下文。
+// 此片段由 apply-mobile-client-patches.mjs 放入锁定上游 bundle，行为测试执行产物。
+function installShortcutModalKeyboardGuard(ctx) {
+    phone_chrome.installMobileEffect(ctx, 'dsh-web-mobile: shortcut modal keyboard guard', () => {
+        const proto = HTMLInputElement.prototype;
+        const descriptor = Object.getOwnPropertyDescriptor(proto, 'focus');
+        const previous = proto.focus;
+        // 某些宿主/插件会锁住原型；此时保持浏览器默认聚焦，不让适配导致整页失败。
+        if (typeof previous !== 'function' || descriptor?.configurable === false ||
+            (!descriptor && !Object.isExtensible(proto))) return;
+        const selector = '[data-shortcut-modal="shortcuts"] [data-modal-autofocus]';
+        // 断点切回移动布局时，已存在的输入框不是首次挂载。
+        const initialized = new WeakSet(document.querySelectorAll(selector));
+        const pending = new WeakSet();
+        let active = true;
+        const wrapper = function focus(options) {
+            if (active && this.matches(selector)) {
+                // focusWithoutRing 是当前宿主明确的自动聚焦入口。一次 commit 内
+                // Modal 和快捷键组件各有 layoutEffect，必须一起抑制，然后立即解除。
+                if (!initialized.has(this) && this.hasAttribute('data-dsh-automatic-focus')) {
+                    if (!pending.has(this)) {
+                        pending.add(this);
+                        Promise.resolve().then(() => initialized.add(this));
+                        const dialog = this.closest('[role="dialog"][aria-modal="true"]');
+                        if (dialog && !dialog.contains(document.activeElement)) {
+                            // 官方 Modal 已带 tabindex=-1，不修改 React 管理的属性。
+                            dialog.focus({ preventScroll: true });
+                        }
+                    }
+                    return;
+                }
+                initialized.add(this);
+            }
+            return previous.call(this, options);
+        };
+        try {
+            Object.defineProperty(proto, 'focus', {
+                configurable: true, writable: true,
+                enumerable: descriptor?.enumerable ?? false, value: wrapper,
+            });
+        } catch { return; }
+        // 在移动效果生命周期内提前安装，直接快捷键打开也不依赖 observer 的时序。
+        // 同一属性若后来被别的插件包装，停用本层即可；不能拆掉别人的包装。
+        return () => {
+            active = false;
+            if (Object.getOwnPropertyDescriptor(proto, 'focus')?.value !== wrapper) return;
+            try {
+                if (descriptor) Object.defineProperty(proto, 'focus', descriptor);
+                else delete proto.focus;
+            } catch {
+                // 原型可能在安装后被冻结；active=false 已使残留包装完全透传。
+            }
+        };
+    });
+}
+};
+
 __modules["core/layout-compat.js"] = function (require, module, exports) {
 "use strict";
 // The layout service face drifted between host generations. rc.6's ILayout
@@ -9626,6 +9896,7 @@ const composer_plus_toggle_ts_1 = require("./effects/composer-plus-toggle.js");
 const workspace_chip_toggle_ts_1 = require("./effects/workspace-chip-toggle.js");
 const team_chip_toggle_ts_1 = require("./effects/team-chip-toggle.js");
 const model_menu_anchor_ts_1 = require("./effects/model-menu-anchor.js");
+const shortcut_modal_keyboard_guard_ts_1 = require("./effects/shortcut-modal-keyboard-guard.js");
 const aionui_compat_ts_1 = require("./effects/aionui-compat.js");
 const panel_exit_ts_1 = require("./effects/panel-exit.js");
 const raf_scheduler_ts_1 = require("./core/raf-scheduler.js");
@@ -9822,6 +10093,11 @@ function apply(ctx) {
     // Model/reasoning menu portals to <body>; the CSS centering rule died with the
     // portal move, so re-anchor it on the trigger here (owner report: opens far left).
     (0, model_menu_anchor_ts_1.installModelMenuAnchor)(ctx);
+    // Shortcut modal (settings → 通用设置 → 快捷键): the host focuses its search
+    // field on open, which raises the soft keyboard over a page the user came to
+    // EDIT, and the keyboard shrinking the viewport resizes the sheet (owner
+    // report: 「打开的时候还是会闪，而且还会唤起键盘」).
+    (0, shortcut_modal_keyboard_guard_ts_1.installShortcutModalKeyboardGuard)(ctx);
     (0, phone_chrome_ts_1.installPhoneChrome)(ctx);
     (0, aionui_compat_ts_1.installAionuiCompat)(ctx);
     // Debug badge (?mobile-nav-debug=1): live state overlay for phone-side

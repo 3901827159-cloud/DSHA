@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-# DSHA_ADB_SCRIPT_VERSION=17
+# DSHA_ADB_SCRIPT_VERSION=19
 """设备 shell：原生白名单判定、有限时连接、发送后不重放、真实远端退出码。
 
 用法：adb-shell.py [--host 本机IP] [--port 端口] [--timeout 秒] [--su] 命令
@@ -205,6 +205,30 @@ def parse_shell_result(raw, marker):
     return ShellResult(out[:match.start()], int(match.group(1)))
 
 
+def request_native_vscreen_commit(ticket):
+    """Consume the one-use managed launch authority immediately before the ADB shell send."""
+    import urllib.request
+    import urllib.parse
+    try:
+        with open('/root/.dsh/.bridge_token') as source:
+            token = source.read().strip()
+        if not token:
+            raise ValueError('missing token')
+        query = urllib.parse.urlencode({'ticket': ticket})
+        request = urllib.request.Request('http://127.0.0.1:3090/device/vscreen/commit?' + query,
+            headers={'X-Token': token})
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        with opener.open(request, timeout=10) as response:
+            value = json.loads(response.read(65536)).get('result')
+        if value != 'VSCREEN_START_COMMITTED':
+            raise policy.Blocked('虚拟屏启动许可已撤销或已使用')
+    except policy.Blocked:
+        raise
+    except Exception as error:
+        # A lost commit response may mean the one-use ticket was consumed. Never send or retry.
+        raise ExecutionUnknown('虚拟屏启动许可结果未知，命令未重放（' + type(error).__name__ + '）') from error
+
+
 def run_on_endpoint(device_cls, signer_cls, cmd, host, port, deadline, command_timeout=COMMAND_TIMEOUT):
     remaining = deadline - time.monotonic()
     if remaining <= 0:
@@ -231,6 +255,23 @@ def run_on_endpoint(device_cls, signer_cls, cmd, host, port, deadline, command_t
         try:
             def shell(command):
                 marker = '__DSHA_EXIT_' + uuid.uuid4().hex + '__='
+                if isinstance(cmd, dict) and cmd.get('capability') == 'sms.read':
+                    # A connection may outlive the user's native permission. Recheck
+                    # the same canonical query at the last pre-send boundary; a new
+                    # plan must not silently change its user or requested fields.
+                    current = request_device_plan(command, bool(cmd.get('su')))
+                    if (current.get('authorization') != 'remembered'
+                            or any(current.get(key) != cmd.get(key)
+                                   for key in ('version', 'kind', 'argv', 'capability', 'authorization'))):
+                        raise policy.Blocked('敏感查询授权或内容已变化，命令未发送')
+                if isinstance(cmd, dict) and cmd.get('kind') == 'VIRTUAL_SCREEN':
+                    if cmd.get('_dsha_sent'):
+                        raise policy.Blocked('受管虚拟屏启动只允许发送一次')
+                    ticket = cmd.get('nativeTicket', '')
+                    if not re.fullmatch(r'[a-f0-9]{48}', ticket):
+                        raise policy.Blocked('缺少受管虚拟屏启动许可')
+                    request_native_vscreen_commit(ticket)
+                    cmd['_dsha_sent'] = True
                 if isinstance(cmd, dict) and cmd.get('su'):
                     command = 'su -c ' + shlex.quote(command)
                 raw = dev.shell(frame_command(command, marker),
@@ -343,7 +384,7 @@ def request_device_plan(cmd, use_su=False):
         if not isinstance(value, str) or not value.startswith('{'):
             raise policy.Blocked(str(value or '原生策略未就绪'))
         plan = json.loads(value)
-        if plan.get('version') != 1 or plan.get('kind') not in ('READ', 'FILE', 'STOP', 'VIRTUAL_SCREEN'):
+        if plan.get('version') != 1 or plan.get('kind') not in ('READ', 'FILE', 'STOP'):
             raise policy.Blocked(plan.get('reason') or '命令未获策略允许')
         plan['su'] = use_su
         return plan
@@ -353,12 +394,46 @@ def request_device_plan(cmd, use_su=False):
         raise policy.Blocked('设备策略桥不可用，命令未发送；请打开或更新 DSHA（' + type(error).__name__ + '）') from error
 
 
+def request_native_vscreen_start(cmd, ticket):
+    """Get a typed plan only while the native manager holds the matching launch lease."""
+    import urllib.request
+    import urllib.parse
+    try:
+        with open('/root/.dsh/.bridge_token') as source:
+            token = source.read().strip()
+        if not token:
+            raise ValueError('missing token')
+        query = urllib.parse.urlencode({'cmd': cmd, 'ticket': ticket})
+        request = urllib.request.Request('http://127.0.0.1:3090/device/vscreen/start?' + query,
+            headers={'X-Token': token})
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        with opener.open(request, timeout=15) as response:
+            envelope = json.loads(response.read(1024 * 1024))
+        value = json.loads(envelope['result'])
+        plan = value.get('plan')
+        if (value.get('state') != 'adb' or not isinstance(plan, dict)
+                or plan.get('kind') != 'VIRTUAL_SCREEN' or plan.get('nativeTicket') != ticket
+                or plan.get('nativeAuthorization') != 'managed-vscreen-start'):
+            raise policy.Blocked('原生虚拟屏启动许可没有授权此操作')
+        return plan
+    except policy.Blocked:
+        raise
+    except Exception as error:
+        raise policy.Blocked('无法取得原生虚拟屏启动许可，命令未发送（' + type(error).__name__ + '）') from error
+
+
 def parse_args(args):
-    port, host, timeout, connect_timeout, use_su = 0, '', COMMAND_TIMEOUT, CONNECT_TIMEOUT, False
+    port, host, timeout, connect_timeout, use_su, vscreen_launch = 0, '', COMMAND_TIMEOUT, CONNECT_TIMEOUT, False, False
+    explicit_endpoint = False
     while args:
         option = args[0]
         if option == '--su':
             use_su = True
+            args = args[1:]
+        elif option == '--vscreen-launch':
+            if vscreen_launch:
+                raise ValueError('虚拟屏启动标记重复')
+            vscreen_launch = True
             args = args[1:]
         elif option in ('--port', '--host', '--timeout', '--connect-timeout'):
             if len(args) < 2:
@@ -366,8 +441,10 @@ def parse_args(args):
             value, args = args[1], args[2:]
             if option == '--host':
                 host = str(ipaddress.ip_address(value))
+                explicit_endpoint = True
             elif option == '--port':
                 port = int(value)
+                explicit_endpoint = True
                 if not 1 <= port <= 65535:
                     raise ValueError('端口应在 1—65535')
             else:
@@ -381,7 +458,18 @@ def parse_args(args):
             break
         else:
             break
-    return port, host, timeout, connect_timeout, use_su, (args[0] if len(args) == 1 else shlex.join(args)) if args else 'id'
+    if vscreen_launch and (use_su or explicit_endpoint):
+        raise ValueError('受管虚拟屏启动不能覆盖设备通道或 Root 身份')
+    return port, host, timeout, connect_timeout, use_su, vscreen_launch, (args[0] if len(args) == 1 else shlex.join(args)) if args else 'id'
+
+
+def read_vscreen_ticket(stream=None):
+    """Read exactly one 48-byte lease from the private parent pipe, then require EOF."""
+    source = sys.stdin.buffer if stream is None else stream
+    raw = source.read(49)
+    if len(raw) != 48 or not re.fullmatch(rb'[a-f0-9]{48}', raw):
+        raise ValueError('无效的受管虚拟屏启动许可')
+    return raw.decode('ascii')
 
 
 def request_native_execution(cmd, use_su=False, force_adb=False):
@@ -410,7 +498,7 @@ def request_native_execution(cmd, use_su=False, force_adb=False):
         plan = value.get('plan')
         if value.get('state') != 'adb' or not isinstance(plan, dict) or plan.get('version') != 1:
             raise ValueError('missing explicit ADB plan')
-        if plan.get('kind') not in ('READ', 'FILE', 'STOP', 'VIRTUAL_SCREEN'):
+        if plan.get('kind') not in ('READ', 'FILE', 'STOP'):
             raise ValueError('invalid ADB plan')
         return plan
     except Exception as error:
@@ -419,12 +507,13 @@ def request_native_execution(cmd, use_su=False, force_adb=False):
 
 def main():
     try:
-        port, host, timeout, connect_timeout, use_su, cmd = parse_args(sys.argv[1:])
+        port, host, timeout, connect_timeout, use_su, vscreen_launch, cmd = parse_args(sys.argv[1:])
+        launch_ticket = read_vscreen_ticket() if vscreen_launch else ''
     except ValueError as e:
         print('INVALID_ARGUMENT: %s\n[EXIT=2]' % e)
         return 2
     try:
-        plan = request_native_execution(cmd, use_su, bool(port or host))
+        plan = request_native_vscreen_start(cmd, launch_ticket) if vscreen_launch else request_native_execution(cmd, use_su, bool(port or host))
     except policy.Blocked as error:
         print('[POLICY_BLOCKED] %s\n[EXIT=126]' % error)
         return 126

@@ -279,7 +279,7 @@ class Dependencies:
                              '--config.manage-package-manager-versions=false', '--reporter=append-only']
                 if offline:
                     arguments.append('--offline')
-                process = self.g['run_package_command'](arguments, cwd=work)
+                process = self.g['network']().package_command(arguments, cwd=work, frozen=bool(chosen), offline=offline)
                 if process.returncode:
                     codes = re.findall(r'ERR_PNPM_[A-Z0-9_]+', (process.stderr or '') + (process.stdout or ''))
                     raise ValueError('插件依赖安装失败：' + (codes[0] if codes else 'PNPM_FAILED'))

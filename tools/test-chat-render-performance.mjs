@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// 只加载锁定 rc1 的 React/DOM 与 ui-chat，不连接真实账户，不创建设备会话。
+// 只加载当前锁定 DSH 的 React/DOM 与 ui-chat，不连接真实账户，不创建设备会话。
 import fs from 'node:fs';
 import { browserFixture } from './rc1-browser-fixture.mjs';
 

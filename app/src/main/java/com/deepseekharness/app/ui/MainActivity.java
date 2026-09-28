@@ -74,7 +74,7 @@ public class MainActivity extends AppCompatActivity {
         }
         boolean limitedAllowed = getIntent().getBooleanExtra("limited_entry", false)
                 || config.allowsLimitedEntry(controller.proot().environmentIdentity());
-        if (!limitedAllowed && (com.deepseekharness.app.BackupManager.hasPendingMaintenance(controller)
+        if (!limitedAllowed && (com.deepseekharness.app.core.MaintenanceCoordinator.pending(controller)
                 || !skipExtract && (!controller.isEnvironmentReady()||com.deepseekharness.app.core.EnvironmentAccess.shouldAttemptRuntimeUpdate(controller)))) {
             startActivity(new Intent(this, ExtractActivity.class));
             finish();

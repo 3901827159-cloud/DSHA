@@ -464,7 +464,8 @@ public final class HttpShellService {
             c.setSoTimeout(0);String path=request.target;
             String cmd = "";
             String route = path.split("\\?", 2)[0];
-            if (route.equals("/exec") || route.equals("/confirm") || route.equals("/device/plan") || route.equals("/device/execute")) {
+            if (route.equals("/exec") || route.equals("/confirm") || route.equals("/device/plan")
+                    || route.equals("/device/execute") || route.equals("/device/vscreen/start")) {
                 // 走统一的查询串解析（Query.param）：值要截断到 &，参数名要精确匹配。
                 // 旧实现是 path.indexOf("cmd=") —— 值截断修过了，但参数名边界一直没有，
                 // 于是 ?xcmd=junk&cmd=真命令 会取到 junk。/confirm 的 cmd 是<b>给用户看的
@@ -495,6 +496,10 @@ public final class HttpShellService {
             String result;
             if (!authed) {
                 result = "[UNAUTHORIZED]";
+            } else if (route.equals("/device/vscreen/start")) {
+                result = deviceVscreenStart(cmd, getParam(queryOf(path), "ticket", ""));
+            } else if (route.equals("/device/vscreen/commit")) {
+                result = deviceVscreenCommit(getParam(queryOf(path), "ticket", ""));
             } else if (route.equals("/device/plan")) {
                 result = devicePlan(cmd, "1".equals(getParam(queryOf(path), "su", "0")));
             } else if (route.equals("/device/execute")) {
@@ -609,6 +614,36 @@ public final class HttpShellService {
             // 此时可能已经向设备发过命令，绝不能返回可重试的 ADB 计划。
             return completedExecution("unknown", "[EXECUTION_UNKNOWN] " + safeError(error) + "\n[EXIT=125]");
         }
+    }
+
+    /** ADB-only typed start plan; a one-use ticket is minted by VirtualScreenManager after native authorization. */
+    private String deviceVscreenStart(String command, String ticket) {
+        try {
+            if (!DeviceBridgeService.isAdbEnabled(ctx)
+                    || !com.deepseekharness.app.bridge.LocalNetworkAccess.granted(ctx))
+                return completedExecution("policy", "[POLICY_BLOCKED] ADB 通道不可用\n[EXIT=126]");
+            String source = ctx.getApplicationInfo().sourceDir;
+            String canonical = new java.io.File(source).getCanonicalPath();
+            if (!source.equals(canonical))
+                return completedExecution("policy", "[POLICY_BLOCKED] 无法核验 DSHA 安装包路径\n[EXIT=126]");
+            var plan = com.deepseekharness.app.util.DeviceShellPolicy.inspectVirtualScreenLaunch(command, canonical);
+            if (!plan.allowed()) return completedExecution("policy", plan.reason + "\n[EXIT=126]");
+            if (!com.deepseekharness.app.vscreen.VirtualScreenManager.authorizeAdbLaunchPlan(ticket, command))
+                return completedExecution("policy", "[POLICY_BLOCKED] 虚拟屏启动许可无效、过期或已使用\n[EXIT=126]");
+            org.json.JSONObject value = new org.json.JSONObject().put("version", 1).put("kind", plan.kind.name())
+                    .put("reason", "").put("argv", new org.json.JSONArray(plan.argv))
+                    .put("operands", new org.json.JSONArray()).put("sourceApk", canonical)
+                    .put("nativeAuthorization", "managed-vscreen-start").put("nativeTicket", ticket).put("su", false);
+            return new org.json.JSONObject().put("state", "adb").put("plan", value).toString();
+        } catch (Exception error) {
+            return completedExecution("policy", "[POLICY_BLOCKED] " + safeError(error) + "\n[EXIT=126]");
+        }
+    }
+
+    /** Called by the bundled ADB client immediately before its sole remote shell send. */
+    private String deviceVscreenCommit(String ticket) {
+        return com.deepseekharness.app.vscreen.VirtualScreenManager.commitAdbLaunch(ticket)
+                ? "VSCREEN_START_COMMITTED" : "[POLICY_BLOCKED] 虚拟屏启动许可已撤销或过期";
     }
     private String completedExecution(String transport, String output) {
         try {
@@ -758,11 +793,10 @@ public final class HttpShellService {
                 + com.deepseekharness.app.util.UiText.text("  # 这类应用涉及支付或隐私，每次都需要你确认")
                 : action + com.deepseekharness.app.util.UiText.choose("  # 本次 DSH 运行期间有效，可在设备能力授权中随时撤销", "  # Valid for this DSH run. Revoke anytime in Device permissions");
         boolean ok = requestUserConfirm(why);
-        if (ok && !sensitive) {
-            return !controller.isStopping() && !controller.isUserStopped()
-                    && controller.getWebGeneration() == generation && uiGrant.accept(generation, revision);
-        }
-        return ok;
+        // A sensitive confirmation is one-shot, but must obey the same revocation and
+        // run identity checks as a remembered grant. Never revive an old dialog result.
+        return uiGrant.completeConfirmation(ok, generation, controller.getWebGeneration(), revision,
+                !controller.isStopping() && !controller.isUserStopped(), !sensitive);
     }
 
     private static String shortText(String s) {

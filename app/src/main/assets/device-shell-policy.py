@@ -49,6 +49,88 @@ def checked(result):
     return result.output
 
 
+def sms_provider_path(path, rules):
+    package = re.escape(rules.get('smsProvider', 'com.android.providers.telephony').lower())
+    normalized = posixpath.normpath(path.replace('\\', '/')).lower()
+    return re.fullmatch(r'^/data/(?:data|user/[0-9]+|user_de/[0-9]+)/' + package + r'(?:/.*)?$', normalized) is not None
+
+
+def sms_provider_descendant(path):
+    normalized = posixpath.normpath(path.replace('\\', '/')).lower()
+    if (normalized in ('/', '/data', '/data/data', '/data/user', '/data/user_de')
+            or re.fullmatch(r'/data/user(?:_de)?/[0-9]+', normalized)):
+        return True
+    package = 'com\\.android\\.providers\\.telephony'
+    return re.fullmatch(r'^/data/(?:data|user/[0-9]+|user_de/[0-9]+)/' + package + r'(?:/.*)?$', normalized) is not None
+
+
+def root_read_paths(plan):
+    argv, kind = plan.get('argv', []), plan.get('kind')
+    if kind == 'FILE' and argv and argv[0] == 'cp':
+        return list(plan.get('operands', []))[:-1]
+    if kind != 'READ' or not argv or argv[0] not in {
+            'cat', 'head', 'tail', 'wc', 'grep', 'stat', 'readlink', 'realpath', 'du', 'ls',
+            'find', 'md5sum', 'sha1sum', 'sha256sum', 'sha512sum'}:
+        return []
+    result, after_separator = [], False
+    for arg in argv[1:]:
+        if not after_separator and arg == '--':
+            after_separator = True
+            continue
+        if not after_separator and arg.startswith('-'):
+            if arg.startswith('--') and '=' in arg:
+                arg = arg.split('=', 1)[1]
+            elif len(arg) > 2 and arg[2] == '/':
+                arg = arg[2:]
+            else:
+                continue
+        if arg.startswith('/') or '/' in arg or not arg.startswith('-'):
+            result.append(arg)
+    if not result and argv[0] == 'du':
+        result.append('.')
+    if not result and argv[0] == 'ls' and root_read_may_descend(plan):
+        result.append('.')
+    return result
+
+
+def root_read_may_descend(plan):
+    argv, kind = plan.get('argv', []), plan.get('kind')
+    if not argv:
+        return False
+    command = argv[0]
+    if kind == 'FILE' and command == 'cp':
+        for arg in argv[1:]:
+            if arg == '--':
+                break
+            if arg.startswith('-') and ('r' in arg or 'R' in arg):
+                return True
+        return False
+    if kind != 'READ':
+        return False
+    if command in ('find', 'du'):
+        return True
+    if command in ('ls', 'grep'):
+        for arg in argv[1:]:
+            if arg in ('-R', '-r', '--recursive'):
+                return True
+            if arg.startswith('-') and not arg.startswith('--') and ('r' in arg or 'R' in arg):
+                return True
+    return False
+
+
+def validate_root_reads(plan, shell):
+    rules = plan.get('paths', {})
+    recursive = root_read_may_descend(plan)
+    for value in root_read_paths(plan):
+        if sms_provider_path(value, rules) or recursive and sms_provider_descendant(value):
+            raise Blocked('短信数据库仅允许经原生授权的当前用户 content query')
+        path = normalize(value, rules) if value.startswith('/') else value
+        resolved = checked(shell(argv_command(['readlink', '-f', '--', path]))).strip()
+        if (not resolved.startswith('/') or '\n' in resolved or sms_provider_path(resolved, rules)
+                or recursive and sms_provider_descendant(resolved)):
+            raise Blocked('Root 读取路径属于短信数据库或无法核验')
+
+
 def check_path(path, rules, shell):
     if not write_allowed(path, rules):
         raise Blocked('受保护目录只读：' + path)
@@ -175,16 +257,22 @@ def execute(plan, shell, result_class):
         raise Blocked('原生设备策略没有授权此操作')
     if plan['kind'] == 'VIRTUAL_SCREEN':
         argv = plan.get('argv')
-        if (not isinstance(argv, list) or len(argv) != 9 or argv[0] != 'app_process'
-                or not re.fullmatch(r'-Djava\.class\.path=/data/app/.+\.apk', argv[1])
+        source = plan.get('sourceApk')
+        if (not isinstance(argv, list) or len(argv) != 7 or argv[0] != 'app_process'
+                or not isinstance(source, str) or not re.fullmatch(r'/data/app/[^\s]+\.apk', source)
+                or '..' in source.split('/') or '\\' in source or '//' in source
+                or argv[1] != '-Djava.class.path=' + source
                 or argv[2] != '/system/bin'
                 or argv[3] != 'com.deepseekharness.app.vscreen.VirtualScreenCore'
                 or argv[4:6] != ['--launch', '--port']
-                or not re.fullmatch(r'8[0-9]{3,4}', argv[6])
-                or argv[7] != '--token'
-                or not re.fullmatch(r'[a-f0-9]{32,128}', argv[8])):
+                or not re.fullmatch(r'8[0-9]{3}', argv[6])
+                or plan.get('nativeAuthorization') != 'managed-vscreen-start'
+                or not re.fullmatch(r'[a-f0-9]{48}', str(plan.get('nativeTicket', '')))
+                or plan.get('su', False)):
             raise Blocked('虚拟屏启动参数无法核验')
         return shell(argv_command(argv))
+    if plan.get('su'):
+        validate_root_reads(plan, shell)
     if plan['kind'] == 'STOP':
         # 在当前连接再次刷新清单，先验证全部目标，再按包名停止。
         targets = stop_targets(plan, shell)

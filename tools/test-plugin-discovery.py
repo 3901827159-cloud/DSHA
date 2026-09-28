@@ -112,7 +112,7 @@ class DiscoveryTest(unittest.TestCase):
         root = self.plugin('root/.dsh/node_modules')
         self.put('root/.dsh/node_modules/cordis.patch.yml', '[]')
         self.put(str(root.relative_to(self.root)) + '/package.json',
-                 {'name': 'test-plugin', 'dsh': {'bundle': {'patch': '../cordis.patch.yml'}}})
+                 {'name': 'test-plugin', 'version': '1.0.0', 'dsh': {'bundle': {'patch': '../cordis.patch.yml'}}})
         self.assertNotIn('test-plugin', self.items())
         self.put(str(root.relative_to(self.root)) + '/package.json', '{bad json')
         self.assertNotIn('test-plugin', self.items())
@@ -120,11 +120,11 @@ class DiscoveryTest(unittest.TestCase):
     def test_array_patch_is_validated_before_real_dsh_start(self):
         root = self.plugin('root/.dsh/node_modules')
         self.put(str(root.relative_to(self.root)) + '/package.json',
-                 {'name': 'test-plugin', 'dsh': {'bundle': {'patch': ['cordis.patch.yml', 'cordis.patch.yml']}}})
+                 {'name': 'test-plugin', 'version': '1.0.0', 'dsh': {'bundle': {'patch': ['cordis.patch.yml', 'cordis.patch.yml']}}})
         self.assertIn('test-plugin', self.items())
         self.assertEqual('test-plugin', self.manager.plugin_package(str(root))['name'])
         self.put(str(root.relative_to(self.root)) + '/package.json',
-                 {'name': 'test-plugin', 'dsh': {'bundle': {'patch': ['cordis.patch.yml', '../outside.yml']}}})
+                 {'name': 'test-plugin', 'version': '1.0.0', 'dsh': {'bundle': {'patch': ['cordis.patch.yml', '../outside.yml']}}})
         with self.assertRaisesRegex(ValueError, '越界路径'):
             self.manager.plugin_package(str(root))
 

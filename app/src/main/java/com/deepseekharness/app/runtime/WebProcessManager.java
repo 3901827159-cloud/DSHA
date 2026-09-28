@@ -17,10 +17,14 @@ public class WebProcessManager {
     enum Kind { GONE, WEB, OTHER, DENIED }
     static final class ProcessState {
         final Kind kind; final WebPidIdentity identity; final String command;
-        final boolean differentUid;
+        final boolean differentUid, signalProbeForbidden;
         ProcessState(Kind kind, WebPidIdentity identity, String command) { this(kind, identity, command, false); }
         ProcessState(Kind kind, WebPidIdentity identity, String command, boolean differentUid) {
-            this.kind = kind; this.identity = identity; this.command = command; this.differentUid = differentUid;
+            this(kind, identity, command, differentUid, false);
+        }
+        ProcessState(Kind kind, WebPidIdentity identity, String command, boolean differentUid, boolean signalProbeForbidden) {
+            this.kind = kind; this.identity = identity; this.command = command;
+            this.differentUid = differentUid; this.signalProbeForbidden = signalProbeForbidden;
         }
     }
     private static final class ProcessInspectionException extends IOException {
@@ -130,7 +134,11 @@ public class WebProcessManager {
                 Integer owner = processOwner(pid);
                 if (owner != null && owner != android.os.Process.myUid())
                     return new ProcessState(Kind.OTHER, null, "", true);
-                return new ProcessState(Kind.DENIED, null, "");
+                // 只保留 Linux signal-0 的 EPERM 证据。它与 /proc/stat 单独
+                // EACCES 不同：后者不能说明目标进程不属于本应用。
+                return new ProcessState(Kind.DENIED, null, "", false,
+                        com.deepseekharness.app.util.WebStopEvidence.hiddenUnsignalableCandidate(
+                                error.errno == OsConstants.EPERM, owner));
             }
             throw new IOException(com.deepseekharness.app.util.UiText.text("检查 Web 进程失败（PID ") + pid + "，errno=" + error.errno + com.deepseekharness.app.util.UiText.text("）"), error);
         }
@@ -175,6 +183,12 @@ public class WebProcessManager {
         return com.deepseekharness.app.util.WebStopEvidence.scanUnconfirmed(
                 com.deepseekharness.app.util.WebStopEvidence.Kind.valueOf(state.kind.name()), state.differentUid);
     }
+    /** A hidden foreign PID is not evidence of our Web; a known app-UID denial remains fail-closed. */
+    static boolean globalScanUnconfirmed(Kind kind, boolean differentUid, Integer owner, int appUid) {
+        if (owner != null && !com.deepseekharness.app.util.WebStopEvidence.scanCandidate(owner, appUid)) return false;
+        if (owner == null && kind != Kind.WEB) return false;
+        return scanUnconfirmed(new ProcessState(kind, null, "", differentUid));
+    }
     /** 只读确认同 UID 可控进程；绝不按名称批量停止，也不依赖端口反查。 */
     boolean hasOwnedWeb() throws IOException {
         String[] entries = new File("/proc").list();
@@ -190,8 +204,11 @@ public class WebProcessManager {
             ProcessState state = inspect(pid);
             // uid 不可读时，只有已经完整读到 dsh Web 身份的条目才进入屏障；
             // 单纯的 DENIED/未知系统进程不能把维护永久锁死。
-            if (owner == null && state.kind != Kind.WEB) continue;
-            if (scanUnconfirmed(state)) return true;
+            // 应急进程只有本次出生身份、直启命令和受控工具检查均已登记才可独立运行。
+            // 无法读取身份时仍走原有严格屏障，不能凭 profile 名排除未知进程。
+            if (state.kind == Kind.WEB && com.deepseekharness.app.util.RuntimeInstanceRegistry.shared()
+                    .isIndependentRecovery(state.identity, state.command)) continue;
+            if (globalScanUnconfirmed(state.kind,state.differentUid,owner,android.os.Process.myUid())) return true;
         }
         return false;
     }
@@ -212,8 +229,8 @@ public class WebProcessManager {
                 Integer owner = processOwner(pid);
                 if (owner != null && !com.deepseekharness.app.util.WebStopEvidence.scanCandidate(owner, android.os.Process.myUid())) continue;
                 ProcessState state = inspect(pid);
-                if (owner == null && state.kind != Kind.WEB) continue;
-                if (state.kind == Kind.DENIED && !state.differentUid) return "TRIAL_PROCESS_INSPECTION_DENIED";
+                if (!globalScanUnconfirmed(state.kind,state.differentUid,owner,android.os.Process.myUid())) continue;
+                if (state.kind == Kind.DENIED) return "TRIAL_PROCESS_INSPECTION_DENIED";
                 String profile = state.kind == Kind.WEB ? WebProcSel.trialProfile(state.command) : "";
                 if (!profiles.contains(profile)) continue;
                 ProcessState again = inspect(pid);
@@ -338,7 +355,22 @@ public class WebProcessManager {
             String record = pidRecord();
             if (record == null) return "";
             int pid = WebProcSel.parsePid(record); ProcessState state = inspect(pid);
-            if (mayRetire(state, savedIdentity(pid))) {
+            String saved = savedIdentity(pid);
+            if (mayRetire(state, saved)) {
+                retire(record); return "";
+            }
+            if (records == null && com.deepseekharness.app.util.WebStopEvidence.mayRetireUnsignalableRecord(
+                    com.deepseekharness.app.util.WebStopEvidence.Kind.valueOf(state.kind.name()),
+                    state.signalProbeForbidden, pid, saved)) {
+                // PID 被系统回收后可能归其它应用：hidepid 同时遮住 UID 与出生时刻。
+                // 对同一条记录再取证；不向这个 PID 发任何结束信号。隔离试运行
+                // 不使用此分支，且 /proc 拒读但 signal-0 成功仍保持停止屏障。
+                ProcessState again = inspect(pid);
+                if (!record.equals(pidRecord()) || !saved.equals(savedIdentity(pid))
+                        || !com.deepseekharness.app.util.WebStopEvidence.mayRetireUnsignalableRecord(
+                        com.deepseekharness.app.util.WebStopEvidence.Kind.valueOf(again.kind.name()),
+                        again.signalProbeForbidden, pid, saved))
+                    return "WEB_PROCESS_IDENTITY_CHANGED";
                 retire(record); return "";
             }
             if (state.kind != Kind.WEB || state.identity == null)

@@ -45,7 +45,7 @@ public final class AutomaticBackups {
     public static boolean idle(Context context)throws IOException{
         HarnessController c=HarnessController.get(context);
         return c.config().isWelcomed()&&!NativeBackupJobs.get(context).state().busy&&!c.isStarting()&&!c.isStopping()&&c.getWebAuthUrl().isEmpty()
-                &&!com.deepseekharness.app.core.RuntimeTasks.isBusy()&&!com.deepseekharness.app.BackupManager.hasPendingMaintenance(context.getFilesDir())&&c.isWebStoppedForMaintenance();
+                &&!com.deepseekharness.app.core.RuntimeTasks.isBusy()&&!com.deepseekharness.app.backup.HostMaintenancePending.blocked(context.getFilesDir())&&c.isWebStoppedForMaintenance();
     }
     static boolean idleForOwner(Context context)throws IOException{
         HarnessController c=HarnessController.get(context);
@@ -111,16 +111,6 @@ public final class AutomaticBackups {
     public static void completed(Context context,String id){synchronized(AutomaticBackups.class){if(!FACTORY_RESET.get())prefs(context).edit().putLong("last",System.currentTimeMillis()).putString("lastId",id).putString("error","").commit();}}
     /** 只轮换明确标记、已验证的自动产物，手动副本及未知记录不删除。 */
     public static void prune(Context context,BackupControl control)throws IOException{
-        var fs=new AndroidBackupFileSystem();File parent=new File(context.getFilesDir().getCanonicalFile(),"host-backup-operations");
-        List<VerifiedBackupCopy> automatic=new ArrayList<>();
-        for(var copy:NativeBackupJobs.get(context).verifiedCopies().valid)if(Boolean.TRUE.equals(copy.metadata.get("automatic"))&&Set.of("COMPLETE","DATA_SAVED_PLUGIN_WARNINGS").contains(copy.result(true))){copy.verify(fs,control);automatic.add(copy);}
-        for(int i=3;i<automatic.size();i++){
-            var copy=automatic.get(i);File dir=fs.child(parent,copy.id);
-            var record=BackupJson.read(fs.small(fs.child(dir,"operation.json"),16384),16384);
-            if(Boolean.TRUE.equals(record.get("busy"))||!"FINISHED".equals(record.get("stage")))continue;
-            Set<String> allowed=Set.of("portable.dshbak","verified.json","operation.json","source-checks");
-            if(!allowed.containsAll(fs.list(dir)))continue;
-            copy.verify(fs,control);fs.removeOwned(parent,copy.id);
-        }
+        var fs=new AndroidBackupFileSystem();AutomaticBackupPruner.prune(fs,NativeBackupJobs.get(context).verifiedCopies().valid,control);
     }
 }

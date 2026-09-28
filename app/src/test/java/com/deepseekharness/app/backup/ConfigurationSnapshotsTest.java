@@ -74,6 +74,61 @@ public class ConfigurationSnapshotsTest {
         assertThrows(IOException.class,()->engine.restore((String)row.get("slot"),(String)row.get("id"),new BackupControl(null)));
         assertThrows(IOException.class,()->engine.create("../../outside",new BackupControl(null)));assertEquals("original-4",Files.readString(new File(dsh(root),"settings.yaml").toPath()));untouched(root);
     }
+    @Test public void configurationOperationsPast65And129RemainAvailable()throws Exception{
+        File root=temp.newFolder();fixture(root);var engine=engine(root,null);BackupControl control=new BackupControl(null);
+        for(int index=1;index<=129;index++){
+            engine.create("settings.yaml",control);
+            if(index==65)assertEquals(65,new JvmBackupFileSystem().list(new File(root,ConfigurationSnapshots.OPERATIONS+"/completed")).size());
+            if(index==129)assertEquals(129,new JvmBackupFileSystem().list(new File(root,ConfigurationSnapshots.OPERATIONS+"/completed")).size());
+        }
+        engine.create("settings.yaml",control);
+        assertEquals(130,new JvmBackupFileSystem().list(new File(root,ConfigurationSnapshots.OPERATIONS+"/completed")).size());
+        assertFalse(engine.pending());untouched(root);
+    }
+    @Test public void completedConfigHistoryIsVerifiedOnceThenOrdinaryGateReadsActiveOnly()throws Exception{
+        for(int count:new int[]{0,65,1000}){
+            File root=temp.newFolder(),operations=new File(root,ConfigurationSnapshots.OPERATIONS),history=new File(operations,"completed");
+            Files.createDirectories(history.toPath());
+            for(int index=0;index<count;index++){
+                String id=UUID.randomUUID().toString();File entry=new File(history,id);Files.createDirectory(entry.toPath());
+                Files.writeString(new File(entry,"finalized").toPath(),id+"\nfinalized\n");
+                Files.write(new File(entry,"plan.json").toPath(),BackupJson.write(Map.of("version",1L,"id",id),4096));
+            }
+            JvmBackupFileSystem delegate=new JvmBackupFileSystem();int[] historyLists={0},calls={0};
+            BackupFileSystem counted=(BackupFileSystem)java.lang.reflect.Proxy.newProxyInstance(BackupFileSystem.class.getClassLoader(),
+                    new Class[]{BackupFileSystem.class},(proxy,method,args)->{
+                        calls[0]++;
+                        if(method.getName().equals("list")&&((File)args[0]).equals(history))historyLists[0]++;
+                        try{return method.invoke(delegate,args);}catch(java.lang.reflect.InvocationTargetException error){throw error.getCause();}
+                    });
+            ConfigurationSnapshots snapshots=new ConfigurationSnapshots(counted,root,dsh(root));
+            assertTrue(snapshots.pendingNative().isEmpty());assertEquals(1,historyLists[0]);
+            historyLists[0]=0;calls[0]=0;long start=System.nanoTime();
+            for(int repetition=0;repetition<5;repetition++)assertTrue(snapshots.pendingNative().isEmpty());
+            long elapsed=System.nanoTime()-start;
+            assertEquals(0,historyLists[0]);assertTrue(calls[0]<150);assertTrue(elapsed<5_000_000_000L);
+            System.out.println("CONFIG_HISTORY_STABLE count="+count+" fsCalls="+calls[0]+" elapsedNanos="+elapsed);
+        }
+    }
+    @Test public void oldIncompleteConfigHistoryAndNewDuplicateStayBlocked()throws Exception{
+        File root=temp.newFolder(),operations=new File(root,ConfigurationSnapshots.OPERATIONS),history=new File(operations,"completed");
+        Files.createDirectories(history.toPath());String id=UUID.randomUUID().toString();File entry=new File(history,id);Files.createDirectory(entry.toPath());
+        Files.writeString(new File(entry,"switching").toPath(),id+"\nswitching\n");
+        assertThrows(IOException.class,()->engine(root,null).pendingNative());assertTrue(entry.isDirectory());
+        Files.writeString(new File(entry,"finalized").toPath(),id+"\nfinalized\n");
+        Files.write(new File(entry,"plan.json").toPath(),BackupJson.write(Map.of("version",1L,"id",id),4096));
+        assertFalse(engine(root,null).pending());
+        File duplicate=new File(operations,id);Files.createDirectory(duplicate.toPath());
+        IOException error=assertThrows(IOException.class,()->engine(root,null).pendingNative());
+        assertEquals("RECOVERY_OPERATION_DUPLICATE",error.getMessage());assertTrue(entry.isDirectory());assertTrue(duplicate.isDirectory());
+    }
+    @Test public void activeConfigurationSwitchingIsRecheckedAfterHistoryMigration()throws Exception{
+        File root=temp.newFolder(),operations=new File(root,ConfigurationSnapshots.OPERATIONS),history=new File(operations,"completed");
+        Files.createDirectories(history.toPath());assertFalse(engine(root,null).pending());
+        String id=UUID.randomUUID().toString();File active=new File(operations,id);Files.createDirectory(active.toPath());
+        Files.writeString(new File(active,"switching").toPath(),id+"\nswitching\n");
+        assertEquals(List.of(active),engine(root,null).pendingNative());
+    }
     @Test public void realKillDuringConfigurationCommitAndRollbackConverges()throws Exception{
         File root=temp.newFolder();fixture(root);kill(root,"new-config-4",false);assertTrue(engine(root,null).pending());
         kill(root,"rollback-new-config-4",true);engine(root,null).recover(new BackupControl(null));engine(root,null).recover(new BackupControl(null));

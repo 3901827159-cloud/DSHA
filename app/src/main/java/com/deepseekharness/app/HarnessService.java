@@ -60,6 +60,26 @@ public class HarnessService extends Service {
         if (service != null) service.refreshLocks();
     }
 
+    /** 仅在可见界面调用：LAN 已启用时补齐后台服务，而非只启动监听线程。 */
+    public static void ensureLanForeground(Context context) {
+        HarnessController controller = HarnessController.get(context);
+        if (!controller.config().isLanMode() || controller.isUserStopped() || controller.isRestartBlocked()
+                || (!controller.isStarting() && controller.getWebAuthUrl().isEmpty())) return;
+        HarnessService service = activeService;
+        try {
+            if (service != null && service.keepAliveRunning) {
+                service.showForegroundNotification();
+                service.refreshLocks();
+            } else {
+                androidx.core.content.ContextCompat.startForegroundService(context.getApplicationContext(),
+                        new Intent(context.getApplicationContext(), HarnessService.class).setAction(ACTION_START));
+            }
+        } catch (RuntimeException error) {
+            com.deepseekharness.app.core.DiagnosticLog.record(context, "LAN_BACKGROUND_SERVICE",
+                    "Background service unavailable: " + error.getClass().getSimpleName());
+        }
+    }
+
     @Override
     public void onCreate() {
         super.onCreate();
@@ -101,7 +121,8 @@ public class HarnessService extends Service {
             stopWebAndSelf();
             return START_NOT_STICKY;
         }
-        startKeepAlive();
+        if (!keepAliveRunning) startKeepAlive();
+        else refreshLocks();
         return START_STICKY;
     }
 
@@ -156,7 +177,8 @@ public class HarnessService extends Service {
                 && (c.canAutoRestart() || !c.getWebAuthUrl().isEmpty()));
         boolean lan = c.config().isLanMode(), work = com.deepseekharness.app.core.RuntimeTasks.isBusy();
         android.os.PowerManager pm = (android.os.PowerManager) getSystemService(POWER_SERVICE);
-        boolean idle = knownWebIdle();
+        // LAN 需要随时接收远端请求；不读取页面空闲文件决定是否允许休眠。
+        boolean idle = !lan && knownWebIdle();
         boolean keep = powerPolicy.keepCpu(eco, active, starting, pm == null || pm.isInteractive(),
                 lan, work, idle, android.os.SystemClock.elapsedRealtime());
         if (keep) acquireLocks(!eco || lan || work || !idle); else releaseLocks();
@@ -213,8 +235,12 @@ public class HarnessService extends Service {
                 }
                 if (!keepAliveRunning) break;
                 HttpShellService.Lease bridge = shellHttp;
-                if (bridge != null) bridge.ensureStarted();
+                try { if (bridge != null) bridge.ensureStarted(); }
+                catch (RuntimeException error) {
+                    com.deepseekharness.app.core.DiagnosticLog.record(this,"BRIDGE_KEEPALIVE",error.getClass().getSimpleName());
+                }
                 refreshLocks();
+                ensureLanListening();
                 if (!c.canAutoRestart()) {
                     fail = 0;
                     continue;
@@ -266,6 +292,18 @@ public class HarnessService extends Service {
     }
 
     /** TCP 探测 127.0.0.1:<port> 是否可达（proot 与宿主共享网络栈） */
+    /** 与 Web 前台服务同寿命，后台监听失败也可恢复，不依赖重新打开页面。 */
+    private void ensureLanListening() {
+        long generation = c.getWebGeneration();
+        if (!keepAliveRunning || !c.config().isLanMode() || c.isUserStopped() || c.isRestartBlocked()
+                || !LanProxyService.hasDshAuth(generation) || LanProxyService.isBound()) return;
+        try {
+            LanProxyService.start(c.proot().getRootfsDir().getAbsolutePath(), this, c.getWebPort(), generation);
+        } catch (RuntimeException error) {
+            com.deepseekharness.app.core.DiagnosticLog.record(this,"LAN_LISTENER_RETRY",error.getClass().getSimpleName());
+        }
+    }
+
     private boolean isWebUp() {
         int port;
         try {
@@ -303,10 +341,12 @@ public class HarnessService extends Service {
 
     private void showForegroundNotification() {
         Notification notification = buildNotification(com.deepseekharness.app.util.UiText.text("DSHA运行中"), com.deepseekharness.app.util.UiText.text("Web UI 正在后台保持运行"));
-        if (Build.VERSION.SDK_INT >= 34)
+        if (Build.VERSION.SDK_INT >= 34) {
+            int type = android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE;
+            if (c.config().isLanMode()) type |= android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE;
             startForeground(NOTIF_ID, notification,
-                    android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE);
-        else startForeground(NOTIF_ID, notification);
+                    type);
+        } else startForeground(NOTIF_ID, notification);
     }
 
     // ================= 通知 =================

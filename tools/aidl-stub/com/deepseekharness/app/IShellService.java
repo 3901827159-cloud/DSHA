@@ -6,6 +6,7 @@ public interface IShellService extends android.os.IInterface {
     /** Default implementation for IShellService. */
     public static class Default implements IShellService {
         @Override public String exec(String cmd) throws android.os.RemoteException { return null; }
+        @Override public String execVirtualScreen(String command) throws android.os.RemoteException { return null; }
         @Override public void destroy() throws android.os.RemoteException { }
         @Override public android.os.IBinder asBinder() { return null; }
     }
@@ -29,6 +30,14 @@ public interface IShellService extends android.os.IInterface {
                     data.enforceInterface(descriptor);
                     String _arg0 = data.readString();
                     String _result = this.exec(_arg0);
+                    reply.writeNoException();
+                    reply.writeString(_result);
+                    return true;
+                }
+                case TRANSACTION_execVirtualScreen: {
+                    data.enforceInterface(descriptor);
+                    String _arg0 = data.readString();
+                    String _result = this.execVirtualScreen(_arg0);
                     reply.writeNoException();
                     reply.writeString(_result);
                     return true;
@@ -59,6 +68,19 @@ public interface IShellService extends android.os.IInterface {
                 } finally { _reply.recycle(); _data.recycle(); }
                 return _result;
             }
+            @Override public String execVirtualScreen(String command) throws android.os.RemoteException {
+                android.os.Parcel _data = android.os.Parcel.obtain();
+                android.os.Parcel _reply = android.os.Parcel.obtain();
+                String _result;
+                try {
+                    _data.writeInterfaceToken(DESCRIPTOR);
+                    _data.writeString(command);
+                    boolean _status = mRemote.transact(Stub.TRANSACTION_execVirtualScreen, _data, _reply, 0);
+                    _reply.readException();
+                    _result = _reply.readString();
+                } finally { _reply.recycle(); _data.recycle(); }
+                return _result;
+            }
             @Override public void destroy() throws android.os.RemoteException {
                 android.os.Parcel _data = android.os.Parcel.obtain();
                 android.os.Parcel _reply = android.os.Parcel.obtain();
@@ -70,9 +92,11 @@ public interface IShellService extends android.os.IInterface {
             }
         }
         static final int TRANSACTION_exec = android.os.IBinder.FIRST_CALL_TRANSACTION + 0;
+        static final int TRANSACTION_execVirtualScreen = android.os.IBinder.FIRST_CALL_TRANSACTION + 1;
         static final int TRANSACTION_destroy = 16777114;
     }
     public static final String DESCRIPTOR = "com.deepseekharness.app.IShellService";
     public String exec(String cmd) throws android.os.RemoteException;
+    public String execVirtualScreen(String command) throws android.os.RemoteException;
     public void destroy() throws android.os.RemoteException;
 }

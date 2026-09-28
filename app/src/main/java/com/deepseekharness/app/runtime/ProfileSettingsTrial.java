@@ -2,7 +2,7 @@ package com.deepseekharness.app.runtime;
 
 import android.content.Context;
 import com.deepseekharness.app.backup.*;
-import com.deepseekharness.app.core.RuntimeTasks;
+import com.deepseekharness.app.util.RuntimeWorkPort;
 import com.deepseekharness.app.util.*;
 import java.io.*;
 import java.nio.charset.StandardCharsets;
@@ -21,7 +21,7 @@ public final class ProfileSettingsTrial {
     }
     public static Result run(Context context, ProotBootstrap proot, File home, String profile, byte[] currentPatch,
                              byte[] incoming, Map<String,Object> request, BackupControl control) throws IOException {
-        if(!com.deepseekharness.app.BackupManager.isDataTaskOwner())throw new IOException("SETTINGS_REQUIRES_MAINTENANCE");
+        if(!com.deepseekharness.app.util.MaintenanceGate.shared().isOwner())throw new IOException("SETTINGS_REQUIRES_MAINTENANCE");
         if(!ProfileConfigPath.profile(profile))throw new IOException("PROFILE_NAME");
         var fs=new AndroidBackupFileSystem();File files=context.getFilesDir().getCanonicalFile(),records=new File(files,"runtime-trials");
         if(fs.stat(records).type.equals("MISSING"))fs.directory(records);RuntimeTrialRecords.prepareForNew(fs,records);
@@ -62,7 +62,7 @@ public final class ProfileSettingsTrial {
         write(fs,payload,"request.json",BackupJson.write(invocation,BackupLimits.MANIFEST));write(fs,payload,"incoming.yml",incoming);
         fs.directory(new File(payload,"isolated-home"));
         write(fs,operation,"intent.json",BackupJson.write(Map.of("id",id,"nonce",nonce,"purpose","profile-settings","profile",trialProfile,"sourceProfile",profile),16384));
-        WebProcessManager manager=new WebProcessManager(proot,payload);RuntimeTasks lease=RuntimeTasks.begin();Process process=null;
+        WebProcessManager manager=new WebProcessManager(proot,payload);RuntimeWorkPort.Work lease=RuntimeWorkPort.begin();Process process=null;
         try {
             String command="export DSH_HOME="+ShellQuote.arg(guest+"/home")+"; export HOME="+ShellQuote.arg(guest+"/isolated-home")
                     +"; export DSHA_PROFILE_SETTINGS_DIRECTORY="+ShellQuote.arg(guest)+"; export DSHA_PROFILE_SETTINGS_NONCE="+nonce+"; export DSHA_RUNTIME_TRIAL_NONCE="+nonce

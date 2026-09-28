@@ -83,6 +83,56 @@ class FlowTest(unittest.TestCase):
     def execute(self):
         return adb.connect_with_retry(self.Device, self.Signer, 'input tap 10 10', 39000)
 
+    def sensitive_plan(self):
+        return {'version': 1, 'kind': 'READ',
+                'argv': ['content', 'query', '--uri', 'content://sms', '--where', '1=0', '--user', '0'],
+                'capability': 'sms.read', 'authorization': 'remembered', 'su': False}
+
+    def test_sensitive_revocation_during_connect_prevents_dispatch(self):
+        granted = [True]
+        def connected(host, port):
+            granted[0] = False
+        def current_plan(*args, **kwargs):
+            if not granted[0]:
+                raise adb.policy.Blocked('synthetic authorization revoked')
+            return self.sensitive_plan()
+        self.connect_error = connected
+        with patch.object(adb, 'request_device_plan', side_effect=current_plan):
+            with self.assertRaises(adb.policy.Blocked):
+                adb.connect_with_retry(self.Device, self.Signer, self.sensitive_plan(), 39000)
+        self.assertFalse(any(e[0] == 'shell' for e in self.events))
+        self.assertEqual(1, sum(e[0] == 'close' for e in self.events))
+        self.discovery.assert_not_called()
+
+    def test_changed_sensitive_plan_never_dispatches(self):
+        changed = self.sensitive_plan()
+        changed['argv'] = [*changed['argv'][:-1], '10']
+        with patch.object(adb, 'request_device_plan', return_value=changed):
+            with self.assertRaises(adb.policy.Blocked):
+                adb.connect_with_retry(self.Device, self.Signer, self.sensitive_plan(), 39000)
+        self.assertFalse(any(e[0] == 'shell' for e in self.events))
+
+    def test_current_sensitive_plan_checked_after_connect_before_single_send(self):
+        def current_plan(command, use_su=False):
+            self.assertTrue(any(e[0] == 'connect' for e in self.events))
+            self.assertFalse(any(e[0] == 'shell' for e in self.events))
+            self.assertFalse(use_su)
+            self.assertIn('1=0', command)
+            return self.sensitive_plan()
+        with patch.object(adb, 'request_device_plan', side_effect=current_plan) as check:
+            result = adb.connect_with_retry(self.Device, self.Signer, self.sensitive_plan(), 39000)
+        self.assertEqual(0, result.exit_code)
+        check.assert_called_once()
+        self.assertEqual(1, sum(e[0] == 'shell' for e in self.events))
+
+    def test_sensitive_revalidation_failure_closes_without_send_or_retry(self):
+        with patch.object(adb, 'request_device_plan', side_effect=adb.policy.Blocked('synthetic bridge unavailable')):
+            with self.assertRaises(adb.policy.Blocked):
+                adb.connect_with_retry(self.Device, self.Signer, self.sensitive_plan(), 39000)
+        self.assertFalse(any(e[0] == 'shell' for e in self.events))
+        self.assertEqual(1, sum(e[0] == 'close' for e in self.events))
+        self.discovery.assert_not_called()
+
     def test_timeout_after_dispatch_never_replays(self):
         self.shell_error = TimeoutError('回复丢失')
         with self.assertRaises(adb.ExecutionUnknown): self.execute()
@@ -258,10 +308,12 @@ class FlowTest(unittest.TestCase):
         pair.ensure_key.assert_not_called()
 
     def test_script_and_wrapper_version_match_java(self):
-        for file in ['adb-shell.py', 'adb-pair.py', 'adb-setup.sh']:
-            self.assertIn('DSHA_ADB_SCRIPT_VERSION=17', (ASSETS / file).read_text(encoding='utf-8'))
         source = (ROOT / 'app/src/main/java/com/deepseekharness/app/bridge/AdbBridge.java').read_text(encoding='utf-8')
-        self.assertIn('SCRIPT_VERSION = "17"', source)
+        version = re.search(r'SCRIPT_VERSION = "([0-9]+)"', source).group(1)
+        for file in ['adb-shell.py', 'adb-pair.py', 'adb-setup.sh', 'dsha-device-shell.sh']:
+            markers = re.findall(r'^# DSHA_ADB_SCRIPT_VERSION=([0-9]+)$', (ASSETS / file).read_text(encoding='utf-8'), re.M)
+            self.assertTrue(markers, file)
+            self.assertTrue(all(value == version for value in markers), file)
         self.assertIn("grep -q '^# DSHA_ADB_SCRIPT_VERSION=", source)
 
 

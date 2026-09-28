@@ -76,7 +76,7 @@ final class EnvironmentDataBackup {
         return new JSONObject(result[0]);
     }
     private static void requireOwner() throws IOException {
-        if (!BackupManager.isDataTaskOwner()) throw new IOException(com.deepseekharness.app.util.UiText.text("个人文件迁移必须持有维护任务锁"));
+        if (!MaintenanceCoordinator.isOwner()) throw new IOException(com.deepseekharness.app.util.UiText.text("个人文件迁移必须持有维护任务锁"));
     }
     private static void verify(File file, String expected) throws IOException {
         if (expected == null || !expected.matches("[a-f0-9]{64}")) throw new IOException(com.deepseekharness.app.util.UiText.text("个人文件摘要无效"));

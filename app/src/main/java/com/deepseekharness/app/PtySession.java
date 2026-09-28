@@ -95,9 +95,10 @@ public final class PtySession implements TerminalSessionClient {
         try {
         try { proot.requireUserRuntime(); } catch (java.io.IOException error) { throw new IllegalStateException(error.getMessage(), error); }
         proot.ensureAndroidGroups(); // 登录 shell 的 $(groups) 依赖 /etc/group 里有 Android GID
-        String[] argv = proot.ptyArgv();
+        ProotBootstrap.PtyLaunch launch = proot.ptyLaunch();
+        String[] argv = launch.argv;
         ps.prootLauncher = com.deepseekharness.app.util.ProcessIdentity.isProot(argv[0]);
-        String[] env = proot.ptyEnv();
+        String[] env = launch.environment;
         // args 就是 argv（含 argv[0]）：查过 termux.c，Java 数组原样转成 argv 后
         // 直接 execvp(cmd, argv)，没有任何加工 —— 与 ProcessBuilder 的行为一致。
         TerminalSession s = new TerminalSession(argv[0], "/", argv, env, TRANSCRIPT_ROWS, ps);

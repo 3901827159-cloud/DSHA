@@ -4,6 +4,10 @@ import java.io.*;
 import java.nio.charset.StandardCharsets;
 public final class WebPageScripts {
     private WebPageScripts() { }
+    /** 应急页只注入语言与语法兼容，不注册正式设备/插件桥。 */
+    public static String emergencyCompatibility(Context context) {
+        return language(context)+"\n"+read(context,"web-integration/es-compat.js")+"\n"+read(context,"web-integration/compat.js");
+    }
     public static String compatibility(Context context) {
         String section="";
         if(context instanceof android.app.Activity){String url=((android.app.Activity)context).getIntent().getStringExtra("url");

@@ -11,6 +11,13 @@ Material3、单 Gradle 模块 `:app`。
 ## 技术约束（围绕这些设计）
 
 - **当前本地交付版本为 0.1.7-rc2 / 147**：在 rc1 数据保护、Profile 设置恢复、原生插件审阅、长会话和真机修复基础上，接入上游 `dsh-v0.1.7-rc.2`。详见 `docs/releases/v0.1.7-rc2-build147.md`。上游已将 Agent 预设会话头标签设为只读，并接管模型设置入口；不要把 rc1 的自定义标签/模型导航补丁重新套回 rc2。
+- **独立应急 DSH**：`recovery/RecoveryController` 与 `RecoveryRuntime` 不经过正式环境的迁移、数据绑定及全局启动锁。归档由 `tools/recovery-runtime/lock.json` 单独锁定；应急 Profile 仅有五个受控修复工具，在自身 HOME/workspace 初始化真实工作区。不能用“原生安全 Profile”替代独立运行根。`READY_READ_ONLY` 只允许已鉴权且工具检查通过、但进程身份被系统拒读的本次进程；不得登记正式停止屏障豁免或允许确认写入。
+- **应急请求扩展**：`RecoveryRuntime.prepareProfile` 写入的 `dsha-recovery-agent/package.json` 必须有有效 `name` 与 `version`；锁定 rc2 的官方 `dsh_plugin_packages` 在模型 HTTP 前枚举活动插件。缺版本会抛 `REQUEST_EXTENSION`。宿主夹具必须调用真实 `deepseekLlmApiExtensions.prepare()` 并核对该包；启动没有模型凭据时，原生/网页入口明确提示可先诊断、对话需填写临时密钥。
+- **旧 Web PID 复用**：主 Web 有有效旧 PID+出生身份记录、内核 `kill(pid,0)` 明确 `EPERM` 且二次核验一致时，可以只隔离旧记录，不给该 PID 发信号；这是应用启动 Web 仍在同 UID/运行域的受限判据。单纯 `/proc` 拒读、旧记录缺失或损坏、同 UID 不可核验及隔离试运行继续保留停止屏障，不让用户清数据来摆脱死循环。不得按裸 PID、端口或名称强杀。
+- **应急资产去重**：`recovery-asset-locations.json` 仅映射签名 APK 中的物理位置，不进入应急内容 runtimeId。仅当正式归档 SHA 与独立应急锁完全相同才共用包内字节；不同时必须打包固定应急副本。解压运行根仍独立，不读取正式 rootfs 作为救援依赖。Gradle 追踪实际共享资产及 pinned 副本；增量打包清除已省略的生成归档。当前 APK 门禁必须要求映射存在，历史 ELF 审计才允许无映射格式。
+- **应急修复确认**：`RecoveryRepairBroker` 的 HTTP 接口不能确认写入。原生确认绑定候选、源摘要及数据代次，再经过既有停止屏障和宿主事务；停止应急聊天后，已经确认的原生修复 lease 仍由前台服务保护到结束。`recovery-active` 仅追踪未关闭实例，历史数量不能成为永久启动上限。完整格式化必须先确认应急 guest 和 launcher 均已退出。
+- **移动插件源码修订**：内置 `dsh-web-mobile` 仍标 `3.0.3`，源码固定到 `a094288883b343e848d7f9cf302d73ad8ed4794b`。`tools/apply-mobile-client-patches.mjs` 管理本地差异；保留手机快捷键搜索、首次自动聚焦的定向限制、手势取消及聊天区域观察器优化，不恢复上游已撤回的整批改动。更新后执行真实 rc2 Modal/ShortcutReference 行为测试。
+- **麦克风**：清单同时声明 `RECORD_AUDIO` 与普通权限 `MODIFY_AUDIO_SETTINGS`，Chromium 的录音设备选择需要两者；不能只验证录音权限。`RECORD_AUDIO` 由 `BrowserMicrophone` 按网页请求申请，不能在普通启动时预授权。WebView 与 Gecko 只放行当前本机页面的纯音频请求，严格核对主机名、实际端口、页面和运行代次；摄像头/屏幕音频拒绝。页面取消后等待旧系统结果排空，各系统请求使用独立注册身份，旧回调不能批准新页。应急 localhost 不与正式 127.0.0.1 混用来源。
 - **备份新要求（2026-09-17）覆盖旧的禁用自动备份规则**：`AutomaticBackups` 默认开启，独立本机计划支持每日、1–168 小时间隔和停止后。使用既有宿主 v5 加密与预检，后台作业不强停 Web/终端。正常自动副本保留 3 份，手动、未知、部分记录不自动删除；插件依赖提示不能改称完全通过。本机密钥和副本不提供卸载存续保证，界面必须引导导出及保存密码。
 - **旧环境清理新要求（2026-09-17）**：覆盖更新在闲时清理可再生缓存及多余健康受管副本；旧运行时的读写不兼容只阻止回退，不能令全部旧组件永久堆积。保留至少两份健康且字节仍符合计划的副本，修改过或含额外文件的原件不删除。新重建通过数据和运行核验后建立 `retired-proof.json`，核对旧树 inode、树摘要、数据归档及映射，再清理 `previous-linux`；无证明的历史重建原件继续保留。
 - **设备验收经验**：`uiautomator dump` 会抑制其他无障碍服务，活动配对/持续读屏验收期间使用普通截图和实际本机桥；屏幕授权绑定 DSH generation，停止/断连/手动撤销后失效。截图使用应用私有 Pictures/DSHA，无需所有文件访问。PiP 可能盖住底部控件；自动化必须核对实际可见区域与屏幕方向，不能只按底层 XML 坐标点击。截图/读屏不可将敏感值写入公开取证文件。

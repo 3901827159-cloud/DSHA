@@ -35,4 +35,16 @@ public class WebStopEvidenceTest {
         assertTrue(WebStopEvidence.scanUnconfirmed(WEB, false));
         assertFalse(WebStopEvidence.scanUnconfirmed(OTHER, false));
     }
+    @Test public void hiddenForeignPidRequiresExplicitSignalProbeAndValidSavedBirth() {
+        assertTrue(WebStopEvidence.hiddenUnsignalableCandidate(true, null));
+        assertFalse(WebStopEvidence.hiddenUnsignalableCandidate(false, null));
+        assertFalse(WebStopEvidence.hiddenUnsignalableCandidate(true, 10042));
+        assertFalse(WebStopEvidence.hiddenUnsignalableCandidate(true, 10043));
+        assertTrue(WebStopEvidence.mayRetireUnsignalableRecord(DENIED, true, 42, "42 100"));
+        for (String record : new String[]{null, "", "41 100", "42", "42 0", "42 bad"})
+            assertFalse(WebStopEvidence.mayRetireUnsignalableRecord(DENIED, true, 42, record));
+        assertFalse(WebStopEvidence.mayRetireUnsignalableRecord(DENIED, false, 42, "42 100"));
+        assertFalse(WebStopEvidence.mayRetireUnsignalableRecord(WEB, true, 42, "42 100"));
+        assertFalse(WebStopEvidence.mayRetireUnsignalableRecord(DENIED, true, 1, "1 100"));
+    }
 }

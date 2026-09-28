@@ -53,7 +53,6 @@ public class WebPreviewActivity extends PictureInPictureActivity implements WebF
     private TextView errorDetail;
     private ProgressBar progress;
     private WebView webView;
-    private ValueCallback<Uri[]> fileCallback;
     private String authUrl;
     private String authCookie;
     private String baseUrl;
@@ -66,6 +65,21 @@ public class WebPreviewActivity extends PictureInPictureActivity implements WebF
     private boolean navigatingBack;
     private PreviewAuth previewAuth;
     private long startupGeneration;
+    private BrowserMicrophone microphone;
+    private WebViewMicrophone microphoneRequests;
+
+    private static final class PendingUpload {
+        final WebView view;
+        final WebUploads.Session uploads;
+        final ValueCallback<Uri[]> callback;
+        final com.deepseekharness.app.util.BrowserUploadRequestState.Ticket<WebView,WebUploads.Session> ticket;
+        final java.util.concurrent.atomic.AtomicBoolean completed = new java.util.concurrent.atomic.AtomicBoolean();
+        PendingUpload(WebView view,WebUploads.Session uploads,ValueCallback<Uri[]> callback,
+                com.deepseekharness.app.util.BrowserUploadRequestState.Ticket<WebView,WebUploads.Session> ticket){
+            this.view=view;this.uploads=uploads;this.callback=callback;this.ticket=ticket;
+        }
+        boolean complete(Uri[] value){if(!completed.compareAndSet(false,true))return false;callback.onReceiveValue(value);return true;}
+    }
 
     public static final class Retained extends androidx.lifecycle.ViewModel {
         WebView view;
@@ -77,23 +91,24 @@ public class WebPreviewActivity extends PictureInPictureActivity implements WebF
         androidx.webkit.ScriptHandler compatibilityScript;
         String scriptLanguage;
         WebBlobDownload blobDownload;
-        ValueCallback<Uri[]> pickerCallback;
-        final java.util.ArrayList<java.io.File> uploads = new java.util.ArrayList<>();
+        PendingUpload pendingUpload;
+        WebUploads.Session uploadSession;
+        final com.deepseekharness.app.util.BrowserUploadRequestState<WebView,WebUploads.Session> uploadRequests =
+                new com.deepseekharness.app.util.BrowserUploadRequestState<>();
         @Override protected void onCleared() {
-            if (pickerCallback != null) pickerCallback.onReceiveValue(null);
+            if (pendingUpload != null) { pendingUpload.complete(null); pendingUpload=null; }
+            uploadRequests.close();
             if (view != null) view.destroy();
             view = null;
             if (blobDownload != null) blobDownload.close();
-            WebUploads.clean(uploads);
+            if(uploadSession!=null){uploadSession.close();uploadSession=null;}
         }
     }
 
     private final ActivityResultLauncher<Intent> filePicker = registerForActivityResult(
             new ActivityResultContracts.StartActivityForResult(), result -> {
-                ValueCallback<Uri[]> callback = retained.pickerCallback;
-                retained.pickerCallback = null;
-                fileCallback = null;
-                if (callback == null) return;
+                PendingUpload pending=retained.pendingUpload;
+                if(pending==null)return;
                 Uri[] selected = WebUploads.parseChooserResult(
                         result.getResultCode(), result.getData());
                 if (selected != null) {
@@ -105,26 +120,31 @@ public class WebPreviewActivity extends PictureInPictureActivity implements WebF
                         }
                     }
                 }
-                if (selected == null) { callback.onReceiveValue(null); return; }
+                if (selected == null) { retained.pendingUpload=null;retained.uploadRequests.finish(pending.ticket);pending.complete(null);return; }
                 final Uri[] chosen = selected;
                 final Retained owner = retained;
                 final Context app = getApplicationContext();
                 new Thread(() -> {
-                    java.util.ArrayList<java.io.File> copied = new java.util.ArrayList<>();
+                    WebUploads.Batch batch = null;
                     try {
-                        copied = WebUploads.copy(app, java.util.Arrays.asList(chosen));
-                        Uri[] local = new Uri[copied.size()];
-                        for (int i=0;i<local.length;i++) local[i] = androidx.core.content.FileProvider.getUriForFile(app,app.getPackageName()+".updates",copied.get(i));
-                        final java.util.ArrayList<java.io.File> ready = copied;
+                        batch=pending.uploads.copy(app,java.util.Arrays.asList(chosen));
+                        Uri[] local = new Uri[batch.files().size()];
+                        for (int i=0;i<local.length;i++) local[i] = androidx.core.content.FileProvider.getUriForFile(app,app.getPackageName()+".updates",batch.files().get(i));
+                        final WebUploads.Batch ready=batch;
                         new android.os.Handler(android.os.Looper.getMainLooper()).post(() -> {
-                            if (owner.view == null) { WebUploads.clean(ready); callback.onReceiveValue(null); }
-                            else { owner.uploads.addAll(ready); callback.onReceiveValue(local); }
+                            if(owner.pendingUpload!=pending||!owner.uploadRequests.owns(pending.ticket,owner.view,owner.uploadSession)
+                                    ||pending.uploads.isClosed()||!ready.commit()) {
+                                ready.close();
+                                if(owner.pendingUpload==pending){owner.pendingUpload=null;owner.uploadRequests.finish(pending.ticket);}
+                                pending.complete(null);return;
+                            }
+                            owner.pendingUpload=null;owner.uploadRequests.finish(pending.ticket);pending.complete(local);
                         });
                     } catch (Exception error) {
-                        WebUploads.clean(copied);
+                        if(batch!=null)batch.close();
                         new android.os.Handler(android.os.Looper.getMainLooper()).post(() -> {
-                            callback.onReceiveValue(null);
-                            Toast.makeText(app,com.deepseekharness.app.util.UiText.text("上传失败：")+error.getMessage(),Toast.LENGTH_LONG).show();
+                            if(owner.pendingUpload==pending){owner.pendingUpload=null;owner.uploadRequests.finish(pending.ticket);}
+                            if(pending.complete(null)&&!pending.uploads.isClosed())Toast.makeText(app,com.deepseekharness.app.util.UiText.text("上传失败：")+error.getMessage(),Toast.LENGTH_LONG).show();
                         });
                     }
                 },"web-file-import").start();
@@ -138,6 +158,7 @@ public class WebPreviewActivity extends PictureInPictureActivity implements WebF
     @Override
     protected void onCreate(@Nullable Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        microphone = new BrowserMicrophone(this);
         startupGeneration = com.deepseekharness.app.core.HarnessController.get(this).getWebGeneration();
         retained = new androidx.lifecycle.ViewModelProvider(this).get(Retained.class);
         retained.owner = new java.lang.ref.WeakReference<>(this);
@@ -272,6 +293,14 @@ public class WebPreviewActivity extends PictureInPictureActivity implements WebF
     }
 
     private void attachClients(WebView view) {
+        if(microphoneRequests!=null)microphoneRequests.cancel();
+        var microphoneController=com.deepseekharness.app.core.HarnessController.get(this);
+        long microphoneGeneration=microphoneController.getWebGeneration();
+        microphoneRequests=new WebViewMicrophone(microphone,view,()->baseUrl,()->webView==view&&!pageFailed
+                &&retained.owner.get()==this&&!isFinishing()&&!isDestroyed()
+                &&microphoneController.getWebGeneration()==microphoneGeneration
+                &&!microphoneController.isStopping()&&!microphoneController.isUserStopped()
+                &&authUrl!=null&&authUrl.equals(microphoneController.getWebAuthUrl()));
         updateDocumentLanguage(view);
         if (androidx.webkit.WebViewFeature.isFeatureSupported(androidx.webkit.WebViewFeature.WEB_MESSAGE_LISTENER)) {
             androidx.webkit.WebViewCompat.removeWebMessageListener(view,"DshaLanguage");
@@ -290,7 +319,7 @@ public class WebPreviewActivity extends PictureInPictureActivity implements WebF
                 });
         }
         view.setWebViewClient(new PreviewClient());
-        view.setWebChromeClient(new PreviewChromeClient());
+        view.setWebChromeClient(new PreviewChromeClient(microphoneRequests));
         view.setDownloadListener((url, agent, disposition, mime, length) -> {
             if (!WebPreviewPolicy.sameService(baseUrl, view.getUrl())) return;
             String name = android.webkit.URLUtil.guessFileName(url,disposition,mime);
@@ -332,6 +361,8 @@ public class WebPreviewActivity extends PictureInPictureActivity implements WebF
 
         @Override public void onPageStarted(WebView view, String url, Bitmap favicon) {
             if (webView != view) return;
+            cancelFileSelection();
+            if(microphoneRequests!=null)microphoneRequests.cancel();
             retained.ready = false; refreshPictureInPicture();
             pageFailed = false;
             errorPanel.setVisibility(View.GONE);
@@ -399,6 +430,10 @@ public class WebPreviewActivity extends PictureInPictureActivity implements WebF
     }
 
     private class PreviewChromeClient extends WebChromeClient {
+        private final WebViewMicrophone audio;
+        PreviewChromeClient(WebViewMicrophone audio){this.audio=audio;}
+        @Override public void onPermissionRequest(android.webkit.PermissionRequest request){audio.request(request);}
+        @Override public void onPermissionRequestCanceled(android.webkit.PermissionRequest request){audio.cancelled(request);}
         @Override public boolean onConsoleMessage(android.webkit.ConsoleMessage message) {
             com.deepseekharness.app.core.StartupDiagnostics diagnostics = com.deepseekharness.app.core.HarnessController.get(WebPreviewActivity.this).startupDiagnostics();
             if (message.message().startsWith("[DSHA_PAGE] ") && message.message().length() <= 9500
@@ -433,8 +468,9 @@ public class WebPreviewActivity extends PictureInPictureActivity implements WebF
                 callback.onReceiveValue(null);
                 return true;
             }
-            fileCallback = callback;
-            retained.pickerCallback = callback;
+            WebUploads.Session session=retained.uploadSession;
+            if(session==null||session.isClosed())retained.uploadSession=session=new WebUploads.Session(getCacheDir());
+            retained.pendingUpload=new PendingUpload(view,session,callback,retained.uploadRequests.begin(view,session));
             Intent primary = null;
             try {
                 primary = params.createIntent();
@@ -456,6 +492,8 @@ public class WebPreviewActivity extends PictureInPictureActivity implements WebF
 
     private void showError(String title, String detail) {
         if (isFinishing() || isDestroyed()) return;
+        cancelFileSelection();
+        if(microphoneRequests!=null)microphoneRequests.cancel();
         com.deepseekharness.app.core.DiagnosticLog.record(this, "WEB_PAGE", title + com.deepseekharness.app.util.UiText.text("：") + detail);
         pageFailed = true;
         retained.ready = false; refreshPictureInPicture();
@@ -496,14 +534,16 @@ public class WebPreviewActivity extends PictureInPictureActivity implements WebF
     }
 
     private void cancelFileSelection() {
-        if (retained == null || retained.pickerCallback == null) return;
-        ValueCallback<Uri[]> callback = retained.pickerCallback;
-        retained.pickerCallback = null;
-        fileCallback = null;
-        callback.onReceiveValue(null);
+        if (retained == null) return;
+        retained.uploadRequests.invalidate();
+        if (retained.pendingUpload == null) return;
+        PendingUpload pending=retained.pendingUpload;
+        retained.pendingUpload=null;
+        pending.complete(null);
     }
 
     private void destroyWebView() {
+        if(microphoneRequests!=null){microphoneRequests.cancel();microphoneRequests=null;}
         cancelFileSelection();
         WebView previous = webView;
         WebFrameRate.clear(this, previous);
@@ -516,6 +556,7 @@ public class WebPreviewActivity extends PictureInPictureActivity implements WebF
             container.removeView(previous);
             previous.destroy();
         }
+        if(retained!=null&&retained.uploadSession!=null){retained.uploadSession.close();retained.uploadSession=null;}
     }
 
     @Override public void onWindowFocusChanged(boolean hasFocus) {
@@ -559,6 +600,8 @@ public class WebPreviewActivity extends PictureInPictureActivity implements WebF
     }
 
     @Override protected void onDestroy() {
+        if(microphoneRequests!=null)microphoneRequests.cancel();
+        if(microphone!=null)microphone.close();
         if (retained != null && retained.owner.get() == this) retained.owner.clear();
         if (previewAuth != null) previewAuth.cancel();
         if (downloads != null) downloads.dismiss();

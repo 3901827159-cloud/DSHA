@@ -163,23 +163,26 @@ public final class TerminalSessionTest {
         await(() -> next.commands.size() == 2);
     }
 
-    @Test public void startupFailureKeepsCommandsWithoutRestartLoop() throws Exception {
+    @Test public void unmarkedStartupExitKeepsLifetimeAndCannotRestartUnknownGuest() throws Exception {
+        backend.registry = new RuntimeTaskRegistry();
         terminal.submit("echo retained");
         FakeProcess old = backend.opened(0);
         old.finish();
-        await(() -> output.toString().contains("旧会话已结束"));
+        await(() -> terminal.state() == TerminalSession.State.FAILED);
         assertEquals(1, backend.processes.size());
+        assertEquals(1, backend.registry.count());
+        assertNull(backend.registry.tryEnterMaintenance());
         terminal.ensureStarted();
-        FakeProcess next = backend.opened(1); next.ready();
-        await(() -> next.commands.size() == 1);
-        assertTrue(next.commands.get(0).contains("echo retained"));
+        Thread.sleep(50);
+        assertEquals(1, backend.processes.size());
+        assertFalse(old.commands.toString().contains("echo retained"));
     }
 
     @Test public void protocolCanBeSplitAcrossChunksWithoutLeakingMarkers() throws Exception {
         terminal.ensureStarted();
         FakeProcess shell = backend.opened(0);
         await(() -> shell.prefix != null);
-        String ready = shell.prefix + "READY:" + shell.group + "\037";
+        String ready = shell.prefix + "READY:" + shell.group + ":" + shell.started + "\037";
         shell.emit("hello");
         for (char ch : ready.toCharArray()) shell.emit(String.valueOf(ch));
         shell.emit("world");
@@ -301,6 +304,37 @@ public final class TerminalSessionTest {
         assertTrue(output.toString().contains("保留环境占用"));
     }
 
+    @Test public void rejectedBirthKeepsSessionAndPendingCommandUntilVerifiedRetry() throws Exception {
+        backend.registry = new RuntimeTaskRegistry();
+        backend.failIdentity = true;
+        terminal.submit("echo pending");
+        FakeProcess shell = backend.opened(0); shell.ready();
+        await(() -> terminal.state() == TerminalSession.State.FAILED);
+        assertEquals(1, backend.registry.count());
+        assertNull(backend.registry.tryEnterMaintenance());
+        assertTrue(shell.commands.isEmpty());
+        backend.failIdentity = false;
+        terminal.cancelAndRestart();
+        FakeProcess next = backend.opened(1); next.ready();
+        await(() -> next.commands.size() == 1);
+        assertTrue(next.commands.get(0).contains("echo pending"));
+    }
+
+    @Test public void reusedGroupNumberWithDifferentBirthCannotAuthorizeCommandsOrStop() throws Exception {
+        backend.registry = new RuntimeTaskRegistry();
+        terminal.submit("echo must-wait");
+        FakeProcess shell = backend.opened(0);
+        await(() -> shell.prefix != null);
+        shell.emit(shell.prefix + "READY:" + shell.group + ":" + (shell.started + 1) + "\037");
+        await(() -> terminal.state() == TerminalSession.State.FAILED);
+        assertTrue(shell.commands.isEmpty());
+        assertEquals(1, backend.registry.count());
+        assertNull(backend.registry.tryEnterMaintenance());
+        assertFalse(terminal.shutdownAndWait(300));
+        assertTrue(backend.killed.isEmpty());
+        assertEquals(1, backend.registry.count());
+    }
+
     @Test public void realPosixSleepCancellationAndShellState() throws Exception {
         // Windows 主机跳过；Linux CI 可运行真实进程组、sleep 和 bash 语义回归，无需 Android。
         org.junit.Assume.assumeTrue(new File("/usr/bin/setsid").canExecute() && new File("/bin/bash").canExecute());
@@ -354,7 +388,8 @@ public final class TerminalSessionTest {
     private static final class FakeBackend implements TerminalSession.Backend {
         final List<FakeProcess> processes = new CopyOnWriteArrayList<>();
         final List<Long> killed = new CopyOnWriteArrayList<>();
-        volatile boolean failStop, keepOldReader, environmentBlocked, rejectEmptyReads;
+        final java.util.Map<FakeProcess, TerminalReady> reported = new java.util.concurrent.ConcurrentHashMap<>();
+        volatile boolean failStop, failIdentity, keepOldReader, environmentBlocked, rejectEmptyReads;
         RuntimeTaskRegistry registry;
         volatile boolean registeredBeforeOpen;
         IOException openFailure;
@@ -368,11 +403,21 @@ public final class TerminalSessionTest {
             return process;
         }
         @Override public void terminate(Process process, long group) throws IOException {
-            if (failStop) throw new IOException("kill failed");
-            killed.add(group);
             FakeProcess fake = (FakeProcess) process;
+            TerminalReady identity = reported.get(fake);
+            if (group <= 1 || identity == null || identity.session != group
+                    || identity.session != fake.group || identity.started != fake.started)
+                throw new IOException("guest identity unknown or reused");
+            if (failStop || failIdentity) throw new IOException("identity or kill failed");
+            killed.add(group);
             fake.alive = false;
             if (!keepOldReader) fake.closeOutput();
+        }
+        @Override public void onReady(Process process, TerminalReady identity) throws IOException {
+            FakeProcess fake = (FakeProcess) process;
+            reported.put(fake, identity);
+            if (failIdentity || identity.session != fake.group || identity.started != fake.started)
+                throw new IOException("birth mismatch");
         }
         @Override public void write(Process process, String text) throws IOException {
             if (environmentBlocked && text.startsWith("eval "))
@@ -387,6 +432,7 @@ public final class TerminalSessionTest {
 
     private static final class FakeProcess extends Process {
         final long group;
+        final long started;
         final LinkedBlockingQueue<Integer> output = new LinkedBlockingQueue<>();
         final List<String> commands = new CopyOnWriteArrayList<>();
         final StringBuffer writes = new StringBuffer();
@@ -394,7 +440,7 @@ public final class TerminalSessionTest {
         volatile boolean rejectEmptyReads, emptyReadAttempted;
         final java.util.concurrent.atomic.AtomicInteger availableCalls = new java.util.concurrent.atomic.AtomicInteger();
         volatile String boot, prefix;
-        FakeProcess(long group) { this.group = group; }
+        FakeProcess(long group) { this.group = group; this.started = group + 10000; }
         @Override public OutputStream getOutputStream() {
             return new OutputStream() {
                 @Override public void write(int b) { writes.append((char) b); }
@@ -437,7 +483,7 @@ public final class TerminalSessionTest {
         @Override public int exitValue() { if (alive) throw new IllegalThreadStateException(); return 0; }
         @Override public void destroy() { finish(); }
         void emit(String text) { for (byte b : text.getBytes(StandardCharsets.UTF_8)) output.add(b & 255); }
-        void ready() throws Exception { await(() -> prefix != null); emit(prefix + "READY:" + group + "\037"); }
+        void ready() throws Exception { await(() -> prefix != null); emit(prefix + "READY:" + group + ":" + started + "\037"); }
         void complete(int command) {
             Matcher done = Pattern.compile("DONE:(\\d+):").matcher(commands.get(command));
             assertTrue(done.find());

@@ -7,13 +7,18 @@ import java.util.*;
 /** 把已隔离恢复的完整依赖组复制到私有候选；源组只读，启用仍需现有审阅流程。 */
 public final class QuarantinedPluginReview {
     private QuarantinedPluginReview() { }
+    static File createReviewSlot(BackupFileSystem fs,File parent)throws IOException{
+        String type=fs.stat(parent).type;
+        if(type.equals("MISSING"))fs.directory(parent);
+        else if(!type.equals("DIRECTORY"))throw new IOException("PLUGIN_QUARANTINE_DIRECTORY");
+        File target=fs.child(parent,UUID.randomUUID().toString());fs.directory(target);return target;
+    }
     public static String[] preparePreset(Context context,String key,BackupControl control)throws IOException{
         var fs=new AndroidBackupFileSystem();File files=context.getFilesDir().getCanonicalFile();
         RetainedCatalogue catalog=new RetainedCatalogue(fs,files,new UserDataLayout(fs,files).current());var entry=catalog.resolve(key);
         if(entry.kind!=RetainedCatalogue.Kind.PRESET)throw new IOException("PRESET_CONVERSION_REQUIRED");
         String before=BackupTree.digest(fs,entry.source,control);String node="package-"+NativeDataLocations.hash(before);
-        File parent=fs.child(files,"linux/ubuntu/root/dsha-native-plugin-reviews");if(fs.stat(parent).type.equals("MISSING"))fs.directory(parent);
-        if(fs.list(parent).size()>=64)throw new IOException("PLUGIN_QUARANTINE_LIMIT");String group=UUID.randomUUID().toString();File target=new File(parent,group);fs.directory(target);
+        File parent=fs.child(files,"linux/ubuntu/root/dsha-native-plugin-reviews");File target=createReviewSlot(fs,parent);String group=target.getName();
         fs.parents(target,"packages/"+node);File bundle=fs.child(target,"packages/"+node);BackupTree.copy(fs,entry.source,bundle,control);
         if(!before.equals(BackupTree.digest(fs,entry.source,control))||!before.equals(BackupTree.digest(fs,bundle,control)))throw new IOException("PLUGIN_QUARANTINE_CHANGED");
         if(!entry.status.equals("QUARANTINED")){
@@ -40,8 +45,7 @@ public final class QuarantinedPluginReview {
         if(!operation.matches("[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}")||!node.matches("package-[a-f0-9]{20}"))throw new IOException("PLUGIN_QUARANTINE_ID");
         var fs=new AndroidBackupFileSystem();File files=context.getFilesDir().getCanonicalFile(),source=fs.child(files,"plugin-imports/"+operation);
         if(!fs.stat(fs.child(source,"packages/"+node+"/package.json")).type.equals("FILE"))throw new IOException("PLUGIN_QUARANTINE_SOURCE");
-        File parent=fs.child(files,"linux/ubuntu/root/dsha-native-plugin-reviews");if(fs.stat(parent).type.equals("MISSING"))fs.directory(parent);
-        if(fs.list(parent).size()>=64)throw new IOException("PLUGIN_QUARANTINE_LIMIT");String id=UUID.randomUUID().toString();File target=fs.child(parent,id);
+        File parent=fs.child(files,"linux/ubuntu/root/dsha-native-plugin-reviews");File target=createReviewSlot(fs,parent);String id=target.getName();
         String before=BackupTree.digest(fs,source,control);BackupTree.copy(fs,source,target,control);
         if(!before.equals(BackupTree.digest(fs,source,control))||!before.equals(BackupTree.digest(fs,target,control)))throw new IOException("PLUGIN_QUARANTINE_CHANGED");
         File report=new File(target,"restore-graph.json");

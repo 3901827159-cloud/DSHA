@@ -22,61 +22,58 @@
 > 🤖 If you are an AI agent or a new contributor, read **[AGENTS.md](AGENTS.md)** first
 > (structure, startup contracts, traps we already fell into). Don't scan the whole repo.
 
+
+## ❤️ Sponsor
+
+<details open>
+<summary>Click to collapse</summary>
+
+<table>
+<tr>
+<td width="180"><a href="https://ai.onyxaxis.org/"><img src="docs/sponsors/axis-ai.jpg" alt="Axis AI" width="150"></a></td>
+<td>Thanks to <a href="https://ai.onyxaxis.org/">Axis AI</a> for sponsoring this project! Axis AI is a free public-interest AI platform where multiple mainstream models are ready to use. Chat, write code, and generate images from one unified platform.</td>
+</tr>
+</table>
+
+</details>
+
 ---
 
-## DSHA v0.1.7-alpha2 · GitHub pre-release
+## DSHA v0.1.7-rc2 — official release · Latest
 
-Published by contributor [@ym2025szz](https://github.com/ym2025szz). This is an experimental pre-release: DSH recently moved to **0.1.7-alpha.2**, changing session, agent-preset, plugin-manager and parts of the Web API contracts. Export important data and keep the backup password before updating. Legacy directory-style custom presets may need migration; see the [pre-release notes](docs/releases/v0.1.7-alpha2-pre-release.md) and [upstream migration discussion](https://github.com/deepseek-ai/deepseek-harness/discussions/7545).
+Maintained and released by contributor [@ym2025szz](https://github.com/ym2025szz). Thanks to original author [@qiannianhuanxiang](https://github.com/qiannianhuanxiang) and the other contributors.
 
-Standard adds an **experimental Android 11+ virtual screen** with ADB/Shizuku/Root channels, app selection and launch, in-app/optional floating preview, touch, keyboard input, AI actions and the accessibility tree. It can be affected by vendor ROMs and revoked permissions; **the Low build does not support virtual screen yet**. This release also fixes PiP streaming flicker, aligns data and backup entries, reduces Language dialog first-frame work, clears plugin-panel title space and updates the bundled mobile plugin.
+**[Official release and notes](https://github.com/DSH-APP/DSHA/releases/tag/v0.1.7-rc2)** · [Changelog](CHANGELOG.md) · [Matching source](https://github.com/DSH-APP/DSHA/tree/v0.1.7-rc2)
 
-- [Pre-release downloads and full comparison](docs/releases/v0.1.7-alpha2-pre-release.md)
-- [GitHub Pre-release](https://github.com/DSH-APP/DSHA/releases/tag/v0.1.7-alpha2)
-
-## DSHA v0.1.6-alpha2.1 · Local delivery build 142
-
-Build 141 fixes `DeepSeek Messages cannot represent user/tool-result content tool-call` when Agent Team, subagent delivery, or compaction replays a nested display-only tool call. System and user plugins now have separate ownership: backups retain user plugins and their dependencies, while system plugins retain only the user's enabled/disabled choice and always come from the current APK. Stale system-plugin entities leave the load path and are retained in quarantine. The proroot JSON `per-record` compatibility path is now V2 and no longer depends on unavailable directory-entry types or `lstat`. This build also removes the permanent block after 32 runtime trials and prevents regenerable WebView/cache `ENOTEMPTY` races from failing a format after core data has already been erased.
-
-Bundled DSH remains **0.1.6-alpha.2**, Ubuntu base remains **10**, and the managed-runtime ID is `34a1cca8a112c4ec2695ba24e38a204c6266efca31dbd55017e1e66bc5fc1394`. DeepSeek Agent Team/compaction/direct tools/error and image results, plugins, backups, formatting, runtime rotation, and maintenance-process shutdown regressions passed. Both flavors passed 608 forced unit tests, Release Lint, E7E3-signed APK/ELF audits, and a non-destructive update on the user-selected M367FC/API 37 tablet; the same-name APKs in `release` have been replaced. This does not claim Android 6/7, every external model service, or every vendor device is covered.
-
-See the [alpha2.1/build 142 changes and acceptance record](docs/releases/v0.1.6-alpha2.1-build142.md), the [build 141 changes and acceptance record](docs/releases/v0.1.6-alpha2-build141.md), the [build 140 proroot/plugin/device record](docs/releases/v0.1.6-alpha2-build140.md), and the [device UI gallery](ui-preview/native-ui-build135-review.html). The website package is prepared locally; the public website and GitHub Release have not been published. Automatic copies are local: export a copy and save its password before uninstalling.
-
-## DSHA v0.1.5-rc2.1 — local delivery
-
-Version code **131**. Both APKs are in the workspace `release` directory and retain the historical publishing certificate. Accepted builds replace the same-version APK under its regular filename; separate `-buildNNN` APK copies are no longer kept. Device acceptance now uses an in-place installation of the release build. This revision adds bounded network bridges and streaming proxy handling, frozen plugin dependencies with review and failure recovery, explicit credential error states, and retained-copy/read-only old-tree rescue management. The #65 / #67 fixes, native encrypted backups and managed runtime protections remain. It does not restore automatic backups or add automatic deletion. See the [delivery notes](docs/releases/v0.1.5-rc2.1-build131.md) and [itemized evidence and device limitations](docs/stability-acceptance.md). This build has not been uploaded to GitHub; the online release is described below.
-
-## DSHA v0.1.5-rc2 — official release · Latest
-
-Maintained and published by contributor [@ym2025szz](https://github.com/ym2025szz), with thanks to original author [@qiannianhuanxiang](https://github.com/qiannianhuanxiang) and the other contributors.
-
-**[Latest official release](https://github.com/DSH-APP/DSHA/releases/latest)** · [Changes and comparison with previous releases](docs/releases/v0.1.5-rc2-notes.md) · [Verification record](docs/releases/v0.1.5-rc2-build129.md)
-
-| Build | Devices | Download | Size |
+| Edition | Devices | Download | Size |
 |---|---|---|---:|
-| Standard | Android 11+ / arm64, system WebView | [APK](https://github.com/DSH-APP/DSHA/releases/download/v0.1.5-rc2/dsha-0.1.5-rc2.apk) · [SHA-256](https://github.com/DSH-APP/DSHA/releases/download/v0.1.5-rc2/dsha-0.1.5-rc2.apk.sha256) | 176.69 MiB |
-| Compatibility | Android 6+ / arm64, bundled Gecko fallback | [APK](https://github.com/DSH-APP/DSHA/releases/download/v0.1.5-rc2/dsha-0.1.5-rc2low.apk) · [SHA-256](https://github.com/DSH-APP/DSHA/releases/download/v0.1.5-rc2/dsha-0.1.5-rc2low.apk.sha256) | 253.23 MiB |
+| Standard | Android 11+ / arm64, system WebView; experimental virtual display | [APK](https://github.com/DSH-APP/DSHA/releases/download/v0.1.7-rc2/dsha-0.1.7-rc2.apk) · [SHA-256](https://github.com/DSH-APP/DSHA/releases/download/v0.1.7-rc2/dsha-0.1.7-rc2.apk.sha256) | 260.95 MiB |
+| Low | Android 6+ / arm64, Gecko fallback; no virtual display support yet | [APK](https://github.com/DSH-APP/DSHA/releases/download/v0.1.7-rc2/dsha-0.1.7-rc2low.apk) · [SHA-256](https://github.com/DSH-APP/DSHA/releases/download/v0.1.7-rc2/dsha-0.1.7-rc2low.apk.sha256) | 333.66 MiB |
 
-GitHub marks this as a **regular release / Latest**, retaining the tested APK name **0.1.5-rc2**, version code **129**, and original publishing certificate. Bundled dsh is **0.1.5-rc.2**; the Ubuntu base remains **10**. Both builds share the application ID and data.
+This is a **regular GitHub release / Latest**, version code **147**, retaining the accepted APK names and historical E7E3 signing certificate. The `rc2` name corresponds to bundled DSH **0.1.7-rc.2**; GitHub does not mark this release as a prerelease. The Ubuntu base remains **10**. Both editions share `com.dsh.client` and its data, so they cannot be installed side by side.
 
 ### What's new
 
-- **Consistent interface:** unified cards, buttons, dialogs, permissions and day/night themes; short-screen and large-font layouts; smoother page transitions. Installation and diagnostic logs scroll inside bounded panels, and the About dialog has clearer actions.
-- **Separate terminal tabs:** PTY and simple terminals retain their processes, output and input across navigation, rotation and language changes. Display numbers reuse gaps; after closing all terminals, the next one is Terminal 1.
-- **Chinese and English:** native screens, app statuses and both browser engines follow the selected language. Switching language keeps Web and terminal processes running; user text, commands, filenames and original third-party errors remain unchanged.
-- **Plugins and presets:** working ascending/descending name sorting, enabled/update-first sorting, framed controls and bundled dsh-web-mobile 2.4.1-dsha.2. Four presets use real server confirmation; tablet controls sit on the right next to a working file button.
-- **Browser and file compatibility:** fixes multiple-file selection loss (#64), older-WebView Iterator/PDF Worker initialization, and missing AbortSignal APIs before plugins load.
-- **Startup and recovery:** port-conflict fallback, continued waiting for slow authentication, clearer failure records and an independent recovery screen. Fixes older tablet environment migration without discarding personal data.
-- **Device access and networks:** consolidated capability grants, Shizuku manager discovery and reconnection for compatible forks, and DNS fallback for affected networks (#63), without replaying HTTP requests.
+- **DSH rc2 and mobile updates:** scheduled tasks, shortcuts and new tools in active sessions, fixes for some long conversations and plugin settings, plus mobile plugin 3.0.3 with DSHA phone adaptations.
+- **Plugin downloads:** fix a nested-lock installation hang; add automatic registry selection, official npm and npmmirror options, up to three concurrent update queries, pinned-version cache reuse and bounded fallback.
+- **Independent recovery and microphone access:** diagnose a broken regular environment from a separately pinned emergency DSH; repair writes still require native confirmation. WebView, Gecko and recovery pages request microphone access when needed.
+- **Reliability:** improve maintenance, terminals, plugin transactions, file access and authorization lifetimes; fix stale Web PID reuse, recovery request extensions and legacy install-status reporting ([#79](https://github.com/DSH-APP/DSHA/issues/79)); restore LAN foreground service and background listener handling ([#80](https://github.com/DSH-APP/DSHA/issues/80)).
 
-Compared with the preceding official release, this moves dsh to rc.2, adds the interface/terminal/language work and includes the subsequent compatibility fixes through build 129. Earlier refactor features—offline Ubuntu, model choices, file previews, backups, plugins and device channels—remain available. See the linked release notes for a version-by-version comparison.
+### Compared with earlier releases
 
-### Upgrading and verification
+| Earlier release | Main additions |
+|---|---|
+| [v0.1.7-alpha2 prerelease](https://github.com/DSH-APP/DSHA/releases/tag/v0.1.7-alpha2) | DSH alpha.2 → rc.2, independent recovery, on-demand microphone access, faster plugin update checks and subsequent reliability fixes; Standard's experimental virtual display remains. |
+| [v0.1.5-rc2 previous official release](https://github.com/DSH-APP/DSHA/releases/tag/v0.1.5-rc2) | Cumulative DSH 0.1.6/0.1.7 features, scheduled local backups, data-maintenance improvements, PiP fixes, Standard's experimental virtual display and this release's changes. |
+| v1.1.10 and earlier | Managed Ubuntu/DSH updates, two APK editions, host-side encrypted backups and independent recovery. The full direct-upgrade matrix has not been revalidated. |
 
-Install over the existing app using the same signing certificate; keep a manual backup of important data. Base-10 environments update managed runtime files in place. Older base-9 environments first protect personal data before rebuilding; an Android 17 tablet completed this migration in testing. The full direct-upgrade matrix from 1.1.10 and earlier has not been revalidated.
+### Upgrade and validation
 
-Each build has **383 unit tests: 382 passed, 1 skipped, no failures**, and no Lint errors. Device checks include WebView 116, Gecko, multi-file callbacks, Shizuku reconnection, PDF Worker startup, and phone/tablet layouts. Android 6/7, real 16 KiB page-size devices and the actual thedjchi fork were not retested in this final round; fork support follows its public protocol.
+Install over the existing app with the same signing certificate. Export important data and save the backup password first; local automatic copies do not guarantee recovery after uninstalling. Updates within the same Ubuntu base replace managed components rather than rebuilding the whole environment for an ordinary DSH update. Emergency DSH is extracted on demand and needs approximately 0.8 GiB of additional free space.
 
-[Issues and feedback](https://github.com/DSH-APP/DSHA/issues) · QQ group **975836806**. Include the device, Android version, reproduction steps and a redacted diagnostic report.
+Each edition has **807 unit tests (806 passed, one existing skip)**. Release Lint, APK/ELF/signing and plugin/recovery gates passed; each final APK completed 11 non-destructive checks on Android 13, including background and screen-off LAN requests. This round does not cover Android 6/7/8 hardware, the original issue tablet, long Doze, a real 16 KiB device or every external model service. Virtual display support remains experimental.
+
+[Release notes](docs/releases/v0.1.7-rc2-notes.md) · [Plugin and #79/#80 verification](docs/releases/v0.1.7-rc2-plugin-network-issues79-80.md) · [Release history](https://github.com/DSH-APP/DSHA/releases) · [Report an issue](https://github.com/DSH-APP/DSHA/issues)
 
 ---
 

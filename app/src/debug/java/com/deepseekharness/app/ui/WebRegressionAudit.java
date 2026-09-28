@@ -184,8 +184,10 @@ public final class WebRegressionAudit extends Instrumentation {
             check(chooser.getHits()>0,"未经过浏览器原生文件选择回调");
             check(WebUploads.fallback(new Intent(Intent.ACTION_OPEN_DOCUMENT).setType("image/*").putExtra(Intent.EXTRA_ALLOW_MULTIPLE,true))
                     .getBooleanExtra(Intent.EXTRA_ALLOW_MULTIPLE,false),"备用选择器丢失多选请求");
-            try { WebUploads.copy(getTargetContext(),Collections.nCopies(21,uri));throw new AssertionError("超过 20 个上传文件未拒绝"); }catch(IOException expected){}
-            try { WebUploads.copy(getTargetContext(),List.of(Uri.parse("file:///invalid/private")));throw new AssertionError("非授权本地路径未拒绝"); }catch(IOException expected){}
+            try(WebUploads.Session uploads=new WebUploads.Session(getTargetContext().getCacheDir())){
+                try { uploads.copy(getTargetContext(),Collections.nCopies(21,uri));throw new AssertionError("超过 20 个上传文件未拒绝"); }catch(IOException expected){}
+                try { uploads.copy(getTargetContext(),List.of(Uri.parse("file:///invalid/private")));throw new AssertionError("非授权本地路径未拒绝"); }catch(IOException expected){}
+            }
             phase("文件上传通过：真实内核选择回调、内容 URI 复制、PNG 字节回读、多选上限与路径限制");
         } finally {removeMonitor(chooser);file.delete();second.delete();}
     }

@@ -45,7 +45,7 @@ public final class FactoryReset {
     public static final String STAGE_FINISH = "FORMAT_FINISH";
 
     public static void eraseLegacyPublicData(BackupControl control) throws IOException {
-        if (!BackupManager.isDataTaskOwner()) throw new IOException("FORMAT_REQUIRES_MAINTENANCE");
+        if (!com.deepseekharness.app.core.MaintenanceCoordinator.isOwner()) throw new IOException("FORMAT_REQUIRES_MAINTENANCE");
         eraseLegacyPublicData(new AndroidBackupFileSystem(),
                 Environment.getExternalStorageDirectory().getCanonicalFile(), control);
     }
@@ -188,7 +188,7 @@ public final class FactoryReset {
      * 手动导出的 SAF/Downloads 归档与 Documents 中 DSHA 以外的个人内容不在这些根下。
      */
     public static Result eraseApplicationData(Context context, BackupControl control) throws IOException {
-        if (!BackupManager.isDataTaskOwner()) throw new IOException("FORMAT_REQUIRES_MAINTENANCE");
+        if (!com.deepseekharness.app.core.MaintenanceCoordinator.isOwner()) throw new IOException("FORMAT_REQUIRES_MAINTENANCE");
         if (!AutomaticBackups.factoryResetSuspended()) throw new IOException("FORMAT_REQUIRES_BACKUP_QUIESCENCE");
         Context app = context.getApplicationContext();
         com.deepseekharness.app.core.UpdateEngine.get(app).stopForFactoryReset();

@@ -19,8 +19,8 @@ function loadModules() {
 
 test('3.0.3 上游 bundle 保留 DSHA 移动端入口与头部让位', () => {
   assert.equal(packageJson.version, '3.0.3');
-  assert.equal(packageJson.dshaUpstream.commit, '881415ffe4daeab1723230e8940f87caeec09348');
-  assert.equal(packageJson.dshaUpstream.clientSha256, '967241b6c7447eff4f2c85454c88730a5a361adc6502cb9d1f4807735b13fba4');
+  assert.equal(packageJson.dshaUpstream.commit, 'a094288883b343e848d7f9cf302d73ad8ed4794b');
+  assert.equal(packageJson.dshaUpstream.clientSha256, '88bfc7b315249cbe8a4fcbcaf41854cce3a8480a5b98a7bdb063ba78b1ae9a19');
   for (const marker of [
     'DSHA_SESSION_INTERACTION_V1',
     '[data-dsha-session-select]',

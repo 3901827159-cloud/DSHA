@@ -15,12 +15,28 @@ public class DshaApp extends Application {
     public void onCreate() {
         super.onCreate();
         // 必须早于界面 Locale.setDefault；保留系统原始语言供「跟随系统」使用。
-        com.deepseekharness.app.util.SystemLanguage.initialize();
+        com.deepseekharness.app.util.SystemLanguage.initialize(this);
         com.deepseekharness.app.data.PortableSettings.initialize(this);
         com.deepseekharness.app.ui.LanguageController.apply(this);
         ShizukuShell.init(this);
         com.deepseekharness.app.ui.ThemeController.apply(this);
         com.deepseekharness.app.core.RuntimeTasks.initialize(this);
+        final android.content.Context runtimeApp = getApplicationContext();
+        com.deepseekharness.app.runtime.RuntimeHostPorts.shared().install(
+                new com.deepseekharness.app.runtime.RuntimeHostPorts.Provider() {
+                    @Override public com.deepseekharness.app.runtime.RuntimeHostPorts.Settings snapshot() {
+                        return new com.deepseekharness.app.core.ConfigStore(runtimeApp).runtimeSettingsSnapshot();
+                    }
+                    @Override public void stage(String value) {
+                        com.deepseekharness.app.core.ColdInstallDiagnostics.stage(runtimeApp, value);
+                    }
+                    @Override public void record(String kind, String detail) {
+                        com.deepseekharness.app.core.ColdInstallDiagnostics.record(runtimeApp, kind, detail);
+                    }
+                    @Override public void failure(Throwable error) {
+                        com.deepseekharness.app.core.ColdInstallDiagnostics.failure(runtimeApp, error);
+                    }
+                });
         com.deepseekharness.app.backup.AutomaticBackups.schedule(this);
         com.deepseekharness.app.backup.PostUpgradeCleanupService.schedule(this);
         com.deepseekharness.app.core.DiagnosticLog.installCrashHandler(this);
