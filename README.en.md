@@ -25,8 +25,12 @@
 
 ## ❤️ Sponsor
 
-<details open>
-<summary>Click to collapse</summary>
+<table>
+<tr>
+<td width="180"><a href="https://zdxjl.com/register?aff=WDYTNDJ5LT4X"><img src="docs/sponsors/lvluo.jpg" alt="绿萝中转站" width="150"></a></td>
+<td>Thanks to <a href="https://zdxjl.com/register?aff=WDYTNDJ5LT4X">绿萝中转站</a> for sponsoring this project! 绿萝中转站 is an AI platform covering models from many vendors: mainstream large models are ready to use on demand, and coding, image generation and more can all be called from one platform. Models from China and abroad are available, new releases land promptly, the service is attentive and the pricing is attractive. Registering through this link gives a 105% top-up bonus.</td>
+</tr>
+</table>
 
 <table>
 <tr>
@@ -34,8 +38,6 @@
 <td>Thanks to <a href="https://ai.onyxaxis.org/">Axis AI</a> for sponsoring this project! Axis AI is a free public-interest AI platform where multiple mainstream models are ready to use. Chat, write code, and generate images from one unified platform.</td>
 </tr>
 </table>
-
-</details>
 
 ---
 
