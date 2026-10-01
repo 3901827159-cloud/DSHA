@@ -1,6 +1,6 @@
 # AGENTS.md
 
-DSHA 的 AI / 新贡献者入口。本文让你不扫全库就能上手 —— 读它之前先读 [README.md](README.md)（或 [README-preview.md](README-preview.md)，按模块重组的新版草稿）。
+DSHA 的 AI / 新贡献者入口。本文让你不扫全库就能上手 —— 读它之前先读 [README.md](README.md)。
 
 **仓库事实速览**：单 Gradle 模块 `:app`，纯 Java 17、无 Kotlin；`applicationId com.dsh.client`，Java 包 `com.deepseekharness.app`；两个 flavor（`standard` / `low`，共用功能代码）；**arm64-v8a only**。APK 用 proot/proroot 把 Ubuntu rootfs 搬进应用私有目录，在里面跑 Node 24 + pnpm + `@deepseek-ai/dsh`（0.1.7-rc.2）的 Web UI（`:3080`）。当前交付版本 0.1.7-rc2 / versionCode 147。
 
