@@ -44,8 +44,11 @@ jobs:
             fi
           done
 
-      - name: Regenerate managed descriptors
+      - name: Regenerate managed generated assets
         run: |
+          (cd tools/web-compat && npm ci)
+          node tools/prepare-web-compat.mjs
+          python3 tools/prepare-ubuntu-tools.py || true
           python3 tools/prepare-runtime-descriptor.py --write || true
 
       - name: Build low debug APK
@@ -54,7 +57,6 @@ jobs:
           export GRADLE_OPTS="-Xmx4g"
           chmod +x gradlew
           ./gradlew :app:assembleLowDebug --no-daemon --stacktrace
-
       - uses: actions/upload-artifact@v4
         with:
           name: dsha-low-debug
