@@ -46,8 +46,9 @@ jobs:
 
       - name: Build low debug APK
         run: |
-          echo "sdk.dir=$ANDROID_HOME" > local.properties
+         echo "sdk.dir=$ANDROID_HOME" > local.properties
           export GRADLE_OPTS="-Xmx4g"
+          python3 tools/prepare-runtime-descriptor.py --write
           chmod +x gradlew
           ./gradlew :app:assembleLowDebug --no-daemon --stacktrace
 
