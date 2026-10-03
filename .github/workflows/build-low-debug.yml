@@ -19,11 +19,11 @@ jobs:
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: 17
+          java-version: '17'
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 24
+          node-version: '24'
 
       - name: Install system tools + Android SDK/NDK
         run: |
@@ -37,6 +37,7 @@ jobs:
           curl -sL -o /tmp/dsha-low.apk \
             https://github.com/DSH-APP/DSHA/releases/download/v0.1.7-rc2/dsha-0.1.7-rc2low.apk
           mkdir -p /tmp/apk && cd /tmp/apk && unzip -o -q /tmp/dsha-low.apk "assets/*"
+          mkdir -p "$GITHUB_WORKSPACE/app/src/main/assets"
           for f in offline-rootfs.bin ubuntu-tools.bin; do
             if [ -f "assets/$f" ]; then
               cp "assets/$f" "$GITHUB_WORKSPACE/app/src/main/assets/$f"
@@ -88,7 +89,9 @@ jobs:
         run: |
           echo "sdk.dir=$ANDROID_HOME" > local.properties
           export GRADLE_OPTS="-Xmx4g"
-          sh ./gradlew :app:assembleLowDebug --no-daemon --stacktrace -x :app:prepareRecoveryAssets - uses: actions/upload-artifact@v4
-          with:
+          sh ./gradlew :app:assembleLowDebug --no-daemon --stacktrace -x :app:prepareRecoveryAssets
+
+      - uses: actions/upload-artifact@v4
+        with:
           name: dsha-low-debug
           path: app/build/outputs/apk/low/debug/*.apk
