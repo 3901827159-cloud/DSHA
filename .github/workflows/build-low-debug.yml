@@ -37,12 +37,21 @@ jobs:
           curl -sL -o /tmp/dsha-low.apk \
             https://github.com/DSH-APP/DSHA/releases/download/v0.1.7-rc2/dsha-0.1.7-rc2low.apk
           mkdir -p /tmp/apk && cd /tmp/apk && unzip -o -q /tmp/dsha-low.apk "assets/*"
-          for f in offline-rootfs.bin dsh-runtime.bin ubuntu-tools.bin; do
+          for f in offline-rootfs.bin ubuntu-tools.bin; do
             if [ -f "assets/$f" ]; then
               cp "assets/$f" "$GITHUB_WORKSPACE/app/src/main/assets/$f"
               echo "restored $f ($(stat -c%s assets/$f) bytes)"
             fi
           done
+
+      - name: Build locked dsh runtime (linux-arm64)
+        run: |
+          cd tools/dsh-runtime
+          npm ci --ignore-scripts --os=linux --cpu=arm64 --libc=glibc
+          cd "$GITHUB_WORKSPACE"
+          python3 tools/build-dsh-runtime.py \
+            --source tools/dsh-runtime/node_modules \
+            --output app/src/main/assets/dsh-runtime.bin
 
       - name: Regenerate managed generated assets
         run: |
@@ -57,6 +66,7 @@ jobs:
           export GRADLE_OPTS="-Xmx4g"
           chmod +x gradlew
           ./gradlew :app:assembleLowDebug --no-daemon --stacktrace
+
       - uses: actions/upload-artifact@v4
         with:
           name: dsha-low-debug
