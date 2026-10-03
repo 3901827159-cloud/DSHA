@@ -88,5 +88,4 @@ jobs:
         run: |
           echo "sdk.dir=$ANDROID_HOME" > local.properties
           export GRADLE_OPTS="-Xmx4g"
-          sh ./gradlew :app:assembleLowDebug --no-daemon --stacktrace
-
+          sh ./gradlew :app:assembleLowDebug --no-daemon --stacktrace -x :app:prepareRecoveryAssets
