@@ -32,33 +32,26 @@ jobs:
           sdkmanager "platform-tools" "build-tools;36.0.0" "ndk;26.3.11579264" || true
           sdkmanager "platforms;android-37" || sdkmanager "platforms;android-37.0" || true
 
-      - name: Restore offline assets from official release APK
+      - name: Restore offline rootfs from official release APK
         run: |
           curl -sL -o /tmp/dsha-low.apk \
             https://github.com/DSH-APP/DSHA/releases/download/v0.1.7-rc2/dsha-0.1.7-rc2low.apk
-          mkdir -p /tmp/apk && cd /tmp/apk && unzip -o -q /tmp/dsha-low.apk "assets/*"
-          for f in offline-rootfs.bin ubuntu-tools.bin; do
-            if [ -f "assets/$f" ]; then
-              cp "assets/$f" "$GITHUB_WORKSPACE/app/src/main/assets/$f"
-              echo "restored $f ($(stat -c%s assets/$f) bytes)"
-            fi
-          done
+          mkdir -p /tmp/apk && cd /tmp/apk && unzip -o -q /tmp/dsha-low.apk "assets/offline-rootfs.bin"
+          cp assets/offline-rootfs.bin "$GITHUB_WORKSPACE/app/src/main/assets/offline-rootfs.bin"
+          echo "restored offline-rootfs.bin ($(stat -c%s assets/offline-rootfs.bin) bytes)"
 
-      - name: Build locked dsh runtime (linux-arm64)
+      - name: Regenerate all managed assets (canonical order)
         run: |
-          cd tools/dsh-runtime
-          npm ci --ignore-scripts --os=linux --cpu=arm64 --libc=glibc
-          cd "$GITHUB_WORKSPACE"
+          set -e
+          (cd tools/web-compat && npm ci)
+          node tools/prepare-web-compat.mjs
+          (cd tools/dsh-runtime && npm ci --ignore-scripts --os=linux --cpu=arm64 --libc=glibc)
           python3 tools/build-dsh-runtime.py \
             --source tools/dsh-runtime/node_modules \
             --output app/src/main/assets/dsh-runtime.bin
-
-      - name: Regenerate managed generated assets
-        run: |
-          (cd tools/web-compat && npm ci)
-          node tools/prepare-web-compat.mjs
-          python3 tools/prepare-ubuntu-tools.py || true
-          python3 tools/prepare-runtime-descriptor.py --write || true
+          python3 tools/prepare-ubuntu-tools.py
+          python3 tools/prepare-backup-assets.py --write
+          python3 tools/prepare-runtime-descriptor.py --write
 
       - name: Build low debug APK
         run: |
@@ -71,3 +64,4 @@ jobs:
         with:
           name: dsha-low-debug
           path: app/build/outputs/apk/low/debug/*.apk
+
