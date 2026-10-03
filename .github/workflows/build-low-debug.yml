@@ -32,13 +32,45 @@ jobs:
           sdkmanager "platform-tools" "build-tools;36.0.0" "ndk;26.3.11579264" || true
           sdkmanager "platforms;android-37" || sdkmanager "platforms;android-37.0" || true
 
-      - name: Restore offline rootfs from official release APK
+      - name: Restore offline archives from official release APK
         run: |
           curl -sL -o /tmp/dsha-low.apk \
             https://github.com/DSH-APP/DSHA/releases/download/v0.1.7-rc2/dsha-0.1.7-rc2low.apk
-          mkdir -p /tmp/apk && cd /tmp/apk && unzip -o -q /tmp/dsha-low.apk "assets/offline-rootfs.bin"
-          cp assets/offline-rootfs.bin "$GITHUB_WORKSPACE/app/src/main/assets/offline-rootfs.bin"
-          echo "restored offline-rootfs.bin ($(stat -c%s assets/offline-rootfs.bin) bytes)"
+          mkdir -p /tmp/apk && cd /tmp/apk && unzip -o -q /tmp/dsha-low.apk "assets/*"
+          for f in offline-rootfs.bin ubuntu-tools.bin; do
+            if [ -f "assets/$f" ]; then
+              cp "assets/$f" "$GITHUB_WORKSPACE/app/src/main/assets/$f"
+              echo "restored $f ($(stat -c%s assets/$f) bytes)"
+            fi
+          done
+
+      - name: Synthesize ubuntu-tools manifest for restored archive
+        run: |
+          python3 - <<'PY'
+          import hashlib, json, pathlib
+          root = pathlib.Path('.')
+          script = root / 'tools/prepare-ubuntu-tools.py'
+          lock_p = root / 'tools/ubuntu-tools/packages.lock.json'
+          def digest(p):
+              h = hashlib.sha256()
+              with open(p, 'rb') as f:
+                  for c in iter(lambda: f.read(1048576), b''):
+                      h.update(c)
+              return h.hexdigest()
+          lock = json.loads(lock_p.read_text())
+          binp = root / 'app/src/main/assets/ubuntu-tools.bin'
+          meta = {
+              'inputs': {script.relative_to(root).as_posix(): digest(script),
+                         lock_p.relative_to(root).as_posix(): digest(lock_p)},
+              'archive_sha256': digest(binp),
+              'installed_bytes': sum(int(r['Installed-Size']) * 1024 for r in lock['packages']),
+              'base_status_sha256': lock['baseStatusSha256'],
+              'packages': len(lock['packages']),
+          }
+          out = root / 'app/src/main/assets/ubuntu-tools.inputs.json'
+          out.write_text(json.dumps(meta, indent=2) + '\n')
+          print('synthesized', out)
+          PY
 
       - name: Regenerate all managed assets (canonical order)
         run: |
@@ -49,7 +81,6 @@ jobs:
           python3 tools/build-dsh-runtime.py \
             --source tools/dsh-runtime/node_modules \
             --output app/src/main/assets/dsh-runtime.bin
-          python3 tools/prepare-ubuntu-tools.py
           python3 tools/prepare-backup-assets.py --write
           python3 tools/prepare-runtime-descriptor.py --write
 
@@ -57,11 +88,5 @@ jobs:
         run: |
           echo "sdk.dir=$ANDROID_HOME" > local.properties
           export GRADLE_OPTS="-Xmx4g"
-          chmod +x gradlew
-          ./gradlew :app:assembleLowDebug --no-daemon --stacktrace
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: dsha-low-debug
-          path: app/build/outputs/apk/low/debug/*.apk
-
+          chmod +x grad
+          
