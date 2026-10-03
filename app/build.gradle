@@ -12,7 +12,7 @@ android {
     ndkVersion '26.3.11579264'
 
     defaultConfig {
-        applicationId "com.dsh.client"
+        applicationId "com.dsh.client.dev"
         minSdk 30
         targetSdk 37
         versionCode 147
