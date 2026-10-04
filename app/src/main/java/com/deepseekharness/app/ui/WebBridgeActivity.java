@@ -119,53 +119,67 @@ public class WebBridgeActivity extends Activity {
         if (!retained.session.isOpen()) retained.session.open(runtime);
         view.setSession(retained.session);
 
-        // 冷启动竞态修复：先等扩展注册完成再加载页面，否则页面跑在注入之前，
-        // content script 缺席 → Port 永远不连 → 30s 超时（WEB_PAGE_NOT_READY）。
+        // 扩展注册已前置到桥启动时（primeExtension），这里只负责开页面。
         String url = getIntent() != null ? getIntent().getStringExtra("url") : null;
-        final String initialUrl = (url != null && !url.isEmpty()) ? url : null;
-        runtime.getWebExtensionController()
+        if (url != null && !url.isEmpty()) retained.session.loadUri(url);
+    }
+
+    private static volatile boolean primed = false;
+
+    /** 前置依赖：桥启动时注册内置扩展 + 运行时级消息 delegate，与窗口生命周期解耦。
+     *  任何 GeckoSession 里 connectNative("dsha") 的 Port 都落到这里。 */
+    public static void primeExtension(android.content.Context ctx) {
+        synchronized (WebBridgeActivity.class) {
+            if (primed) return;
+            primed = true;
+        }
+        final GeckoRuntime rt = GeckoRuntime.getDefault(ctx);
+        rt.getWebExtensionController()
                 .ensureBuiltIn("resource://android/assets/webbridge-integration/", "dsha-webbridge@dsh.client")
-                .accept(ext -> runOnMain(() -> {
-                    attachPort(ext);
-                    if (initialUrl != null && retained.session.isOpen()) retained.session.loadUri(initialUrl);
-                }), e -> {
+                .accept(ext -> {
+                    rt.getWebExtensionController().setMessageDelegate(ext,
+                            new WebExtension.MessageDelegate() {
+                                @Override public void onConnect(WebExtension.Port port) {
+                                    retained.port = port;
+                                    port.setDelegate(new WebExtension.PortDelegate() {
+                                        @Override public void onPortMessage(Object message, WebExtension.Port source) {
+                                            handlePortMessage(message);
+                                        }
+                                        @Override public void onDisconnect(WebExtension.Port source) {
+                                            if (retained.port == source) retained.port = null;
+                                        }
+                                    });
+                                }
+                            }, "dsha");
+                }, e -> {
+                    primed = false;
                     android.util.Log.w("DSHA", "webbridge extension register failed: " + e);
                 });
     }
 
-    private void attachPort(WebExtension extension) {
-        retained.session.getWebExtensionController().setMessageDelegate(extension,
-                new WebExtension.MessageDelegate() {
-                    @Override public void onConnect(WebExtension.Port port) {
-                        retained.port = port;
-                        port.setDelegate(new WebExtension.PortDelegate() {
-                            @Override public void onPortMessage(Object message, WebExtension.Port source) {
-                                android.util.Log.i("DSHA", "[webbridge] " + message);
-                                try {
-                                    if (message instanceof org.json.JSONObject) {
-                                        org.json.JSONObject o = (org.json.JSONObject) message;
-                                        pushEvent(o.toString());
-                                        if ("wb-login".equals(o.optString("type"))) {
-                                            lastLoginState = o.optBoolean("loggedIn", false);
-                                            if (loginMode && Boolean.TRUE.equals(lastLoginState)) {
-                                                loginMode = false;
-                                                runOnMain(() -> {
-                                                    android.widget.Toast.makeText(WebBridgeActivity.this,
-                                                        "Login ok, closing window",
-                                                        android.widget.Toast.LENGTH_SHORT).show();
-                                                    finish();
-                                                });
-                                            }
-                                        }
-                                    }
-                                } catch (Throwable ignored) { }
-                            }
-                            @Override public void onDisconnect(WebExtension.Port source) {
-                                if (retained.port == source) retained.port = null;
+    private static void handlePortMessage(Object message) {
+        android.util.Log.i("DSHA", "[webbridge] " + message);
+        try {
+            if (message instanceof org.json.JSONObject) {
+                org.json.JSONObject o = (org.json.JSONObject) message;
+                pushEvent(o.toString());
+                if ("wb-login".equals(o.optString("type"))) {
+                    lastLoginState = o.optBoolean("loggedIn", false);
+                    if (loginMode && Boolean.TRUE.equals(lastLoginState)) {
+                        loginMode = false;
+                        runOnMain(() -> {
+                            WebBridgeActivity act = instance;
+                            if (act != null) {
+                                android.widget.Toast.makeText(act,
+                                    "Login ok, closing window",
+                                    android.widget.Toast.LENGTH_SHORT).show();
+                                act.finish();
                             }
                         });
                     }
-                }, "dsha");
+                }
+            }
+        } catch (Throwable ignored) { }
     }
 
     public static void openUrl(String url) {
