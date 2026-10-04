@@ -7,8 +7,11 @@
   const STOP_BUTTON = "div[role='button']:has(path[d^='M2 4.88'])";
   const TARGETS = ["/api/v0/chat/completion"];
 
-  const port = browser.runtime.connectNative("dsha");
-  const send = (o) => { try { port.postMessage(o); } catch (e) { /* port down: never break the page */ } };
+  // ---- resilient port: the native delegate may register AFTER page load;
+  //      a one-shot connectNative would leave the page blind forever, so we
+  //      reconnect on drop and retry on failure (2s backoff). ----
+  let port = null;
+  const send = (o) => { try { if (port) port.postMessage(o); } catch (e) { /* port down: never break the page */ } };
   const emit = (id, phase, text) => send({ type: "wb-chunk", id, phase, text: text || "" });
 
   // ---- login judgement (site declaration: guest page = /sign_in without textarea;
@@ -82,7 +85,9 @@
   }
 
   // ---- commands from the native side ----
-  port.onMessage.addListener((msg) => {
+  function bindPort(p) {
+    port = p;
+    p.onMessage.addListener((msg) => {
     if (!msg || !msg.type) return;
     if (msg.type === "wb-eval") {
       let result = null, error = null;
@@ -105,6 +110,14 @@
       const sel = msg.what === "stop" ? STOP_BUTTON : SEND_BUTTON;
       send({ type: "wb-click-result", id: msg.id, ok: clickFirst(sel) });
     }
-  });
-  send({ type: "wb-page", event: "script-start", url: location.href });
+    });
+    p.onDisconnect.addListener(() => { if (port === p) { port = null; setTimeout(connect, 2000); } });
+    send({ type: "wb-page", event: "script-start", url: location.href });
+    reportLogin(true);
+  }
+  function connect() {
+    try { bindPort(browser.runtime.connectNative("dsha")); }
+    catch (e) { setTimeout(connect, 2000); }
+  }
+  connect();
 })();
