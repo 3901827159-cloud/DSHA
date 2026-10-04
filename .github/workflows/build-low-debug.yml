@@ -24,7 +24,11 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
-
+      - uses: actions/cache@v4
+        with:
+          path: ~/.android
+          key: android-debug-keystore-v1
+          
       - name: Install system tools + Android SDK/NDK
         run: |
           sudo apt-get update && sudo apt-get install -y libarchive-tools
