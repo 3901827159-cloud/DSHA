@@ -519,6 +519,8 @@ public final class HttpShellService {
             } else if (route.startsWith("/app/ui/")) {
                 // 唯一保留前缀的组：它是一个端点命名空间，真子路径在 appUi 内再精确分发
                 result = appUi(path);
+            } else if (route.startsWith("/browser/")) {
+                result = browserRoute(path);
             } else if (route.startsWith("/app/vscreen/")) {
                 result = appVscreen(path);
             } else if (route.equals("/app/device")) {
