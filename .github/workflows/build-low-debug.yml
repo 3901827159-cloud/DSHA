@@ -29,8 +29,8 @@ jobs:
       # 新 APK 才能直接覆盖安装旧 dev 版（否则每次都要卸载重解压环境）。
       - uses: actions/cache@v4
         with:
-          path: ~/.android
-          key: android-debug-keystore-v1
+          path: ~/.dsha-ks
+          key: android-debug-keystore-v3
 
       - name: Install system tools + Android SDK/NDK
         run: |
@@ -108,6 +108,31 @@ jobs:
           [ -f "$SRC/cordis.patch.yml" ] && cp "$SRC/cordis.patch.yml" "$DEST/"
           [ -d "$SRC/bin" ] && cp -r "$SRC/bin" "$DEST/bin"
           echo "builtin bundled: $(ls "$DEST" | tr '\n' ' ')"
+
+      - name: Ensure stable debug keystore
+        run: |
+          set -e
+          mkdir -p "$HOME/.dsha-ks"
+          if [ ! -f "$HOME/.dsha-ks/debug.keystore" ]; then
+            keytool -genkeypair -v -keystore "$HOME/.dsha-ks/debug.keystore" \
+              -storepass android -alias androiddebugkey -keypass android \
+              -keyalg RSA -keysize 2048 -validity 10000 \
+              -dname "CN=Android Debug,O=Android,C=US"
+          fi
+          # AGP 找 debug.keystore 的抽屉不止一个：把所有候选位置都放上同一把钥匙
+          mkdir -p "$HOME/.android"
+          cp -f "$HOME/.dsha-ks/debug.keystore" "$HOME/.android/debug.keystore"
+          export ANDROID_SDK_HOME="$HOME/.android-sdk-home"
+          mkdir -p "$ANDROID_SDK_HOME/.android"
+          cp -f "$HOME/.dsha-ks/debug.keystore" "$ANDROID_SDK_HOME/.android/debug.keystore"
+          if [ -n "$ANDROID_HOME" ]; then
+            mkdir -p "$ANDROID_HOME/.android"
+            cp -f "$HOME/.dsha-ks/debug.keystore" "$ANDROID_HOME/.android/debug.keystore"
+          fi
+          echo "ANDROID_SDK_HOME=$HOME/.android-sdk-home" >> "$GITHUB_ENV"
+          echo "== debug keystore fingerprint (must be identical across runs) =="
+          keytool -list -v -keystore "$HOME/.dsha-ks/debug.keystore" -storepass android \
+            | grep -i "SHA-256" || true
 
       - name: Build low debug APK
         run: |
