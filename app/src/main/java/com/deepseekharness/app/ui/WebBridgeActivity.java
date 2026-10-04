@@ -119,15 +119,40 @@ public class WebBridgeActivity extends Activity {
         if (!retained.session.isOpen()) retained.session.open(runtime);
         view.setSession(retained.session);
 
-        // 扩展注册已前置到桥启动时（primeExtension），这里只负责开页面。
+        // 扩展注册已前置到桥启动时（primeExtension），这里挂会话 delegate 并开页面。
+        if (runtimeExt != null) attachSessionDelegate(runtimeExt);
         String url = getIntent() != null ? getIntent().getStringExtra("url") : null;
-        if (url != null && !url.isEmpty()) retained.session.loadUri(url);
+        if (url != null && !url.isEmpty()) {
+            retained.session.loadUri(url);
+            // 双保险：6 秒后 Port 仍没连上（页面跑在注入之前）就重挂 delegate 并重载一次。
+            main.postDelayed(() -> {
+                if (retained.port == null && runtimeExt != null
+                        && retained.session != null && retained.session.isOpen()) {
+                    attachSessionDelegate(runtimeExt);
+                    retained.session.reload();
+                }
+            }, 6000);
+        }
     }
 
     private static volatile boolean primed = false;
+    private static volatile WebExtension runtimeExt = null;
 
-    /** 前置依赖：桥启动时注册内置扩展 + 运行时级消息 delegate，与窗口生命周期解耦。
-     *  任何 GeckoSession 里 connectNative("dsha") 的 Port 都落到这里。 */
+    private static final WebExtension.MessageDelegate DELEGATE = new WebExtension.MessageDelegate() {
+        @Override public void onConnect(WebExtension.Port port) {
+            retained.port = port;
+            port.setDelegate(new WebExtension.PortDelegate() {
+                @Override public void onPortMessage(Object message, WebExtension.Port source) {
+                    handlePortMessage(message);
+                }
+                @Override public void onDisconnect(WebExtension.Port source) {
+                    if (retained.port == source) retained.port = null;
+                }
+            });
+        }
+    };
+
+    /** 前置依赖：桥启动时就把内置扩展注册进 Gecko 运行时（与窗口生命周期解耦）。 */
     public static void primeExtension(android.content.Context ctx) {
         synchronized (WebBridgeActivity.class) {
             if (primed) return;
@@ -137,24 +162,20 @@ public class WebBridgeActivity extends Activity {
         rt.getWebExtensionController()
                 .ensureBuiltIn("resource://android/assets/webbridge-integration/", "dsha-webbridge@dsh.client")
                 .accept(ext -> {
-                    rt.getWebExtensionController().setMessageDelegate(ext,
-                            new WebExtension.MessageDelegate() {
-                                @Override public void onConnect(WebExtension.Port port) {
-                                    retained.port = port;
-                                    port.setDelegate(new WebExtension.PortDelegate() {
-                                        @Override public void onPortMessage(Object message, WebExtension.Port source) {
-                                            handlePortMessage(message);
-                                        }
-                                        @Override public void onDisconnect(WebExtension.Port source) {
-                                            if (retained.port == source) retained.port = null;
-                                        }
-                                    });
-                                }
-                            }, "dsha");
+                    runtimeExt = ext;
+                    runOnMain(() -> attachSessionDelegate(ext));
                 }, e -> {
                     primed = false;
                     android.util.Log.w("DSHA", "webbridge extension register failed: " + e);
                 });
+    }
+
+    /** 消息 delegate 只能挂在会话级控制器上（GV143 运行时级没有此方法）。 */
+    private static void attachSessionDelegate(WebExtension ext) {
+        try {
+            if (retained.session != null && retained.session.isOpen())
+                retained.session.getWebExtensionController().setMessageDelegate(ext, DELEGATE, "dsha");
+        } catch (Throwable ignored) { }
     }
 
     private static void handlePortMessage(Object message) {
