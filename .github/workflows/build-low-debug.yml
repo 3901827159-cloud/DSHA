@@ -24,11 +24,14 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
+
+      # 固定调试签名：缓存 runner 的 debug.keystore，让历次构建签名一致，
+      # 新 APK 才能直接覆盖安装旧 dev 版（否则每次都要卸载重解压环境）。
       - uses: actions/cache@v4
         with:
           path: ~/.android
           key: android-debug-keystore-v1
-          
+
       - name: Install system tools + Android SDK/NDK
         run: |
           sudo apt-get update && sudo apt-get install -y libarchive-tools
@@ -88,6 +91,23 @@ jobs:
             --output app/src/main/assets/dsh-runtime.bin
           python3 tools/prepare-backup-assets.py --write
           python3 tools/prepare-runtime-descriptor.py --write
+
+      - name: Bundle webcode bridge as builtin plugin
+        run: |
+          set +e
+          curl -sL --retry 3 "https://codeload.github.com/3901827159-cloud/dsh-web-bridge/tar.gz/refs/heads/main" -o /tmp/bridge.tgz || exit 0
+          mkdir -p /tmp/bridge && tar xzf /tmp/bridge.tgz -C /tmp/bridge --strip-components=1 || exit 0
+          SRC=/tmp/bridge/package/dsh-webcode-bridge
+          [ -f "$SRC/lib/index.js" ] || exit 0
+          echo "Y29uc3QgZnMgPSByZXF1aXJlKCdmcycpOwpjb25zdCBwID0gKHByb2Nlc3MuZW52LlNSQyB8fCAnLicpICsgJy9saWIvaW5kZXguanMnOwpsZXQgcyA9IGZzLnJlYWRGaWxlU3luYyhwLCAndXRmOCcpOwpjb25zdCBNQVJLID0gJ2NvbnN0IEdFQ0tPX1RPS0VOX0ZJTEUnOwpjb25zdCBhbmNob3IgPSAiaW1wb3J0IHsgY3JlYXRlQnJvd3NlckRyaXZlciB9IGZyb20gJy4vYnJvd3Nlci1kcml2ZXIuanMnOyI7CmNvbnN0IEJMT0NLID0gYGltcG9ydCB7IGNyZWF0ZUdlY2tvRHJpdmVyIH0gZnJvbSAnLi9nZWNrby1iYWNrZW5kLmpzJzsKCi8vIEJhY2tlbmQgc2VsZWN0aW9uOiBleHBsaWNpdCBlbnYgb3ZlcnJpZGUgZmlyc3Q7IG90aGVyd2lzZSBhdXRvLWRldGVjdCDigJQKLy8gb24gRFNIQSAvcm9vdC8uZHNoLy5icmlkZ2VfdG9rZW4gYWx3YXlzIGV4aXN0cyAodGhlIEFwcCBicmlkZ2UgdG9rZW4pLAovLyBoaXR0aW5nIGl0IG1lYW5zIHVzZSB0aGUgZ2Vja28gbmF0aXZlIGJhY2tlbmQ7IG9uIGRlc2t0b3AgdGhlIGZpbGUgaXMKLy8gYWJzZW50IGFuZCBQbGF5d3JpZ2h0IGlzIHVzZWQgYXMgYmVmb3JlLiBPbmUgY29kZWJhc2UsIGJvdGggd29ybGRzLgpjb25zdCBHRUNLT19UT0tFTl9GSUxFID0gcHJvY2Vzcy5lbnYuRFNIQV9CUklER0VfVE9LRU5fRklMRSB8fCAnL3Jvb3QvLmRzaC8uYnJpZGdlX3Rva2VuJzsKY29uc3QgbWFrZURyaXZlciA9CiAgcHJvY2Vzcy5lbnYuV0VCQ09ERV9CQUNLRU5EID09PSAnZ2Vja28nCiAgICA/IGNyZWF0ZUdlY2tvRHJpdmVyCiAgICA6IChwcm9jZXNzLmVudi5XRUJDT0RFX0JBQ0tFTkQgPT09ICdwbGF5d3JpZ2h0JyB8fCAhZnMuZXhpc3RzU3luYyhHRUNLT19UT0tFTl9GSUxFKSkKICAgICAgPyBjcmVhdGVCcm93c2VyRHJpdmVyCiAgICAgIDogY3JlYXRlR2Vja29Ecml2ZXI7CmA7CmlmICghcy5pbmNsdWRlcyhhbmNob3IpKSB7IGNvbnNvbGUuZXJyb3IoJ2FuY2hvciBtaXNzaW5nJyk7IHByb2Nlc3MuZXhpdCgxKTsgfQppZiAoIXMuaW5jbHVkZXMoTUFSSykpIHMgPSBzLnJlcGxhY2UoYW5jaG9yLCBhbmNob3IgKyAnXG4nICsgQkxPQ0spOwpzID0gcy5zcGxpdCgnY3JlYXRlQnJvd3NlckRyaXZlcih7Jykuam9pbignbWFrZURyaXZlcih7Jyk7CmZzLndyaXRlRmlsZVN5bmMocCwgcyk7CmNvbnNvbGUubG9nKCdidWlsdGluIHBhdGNoIG9rOyBtYWtlRHJpdmVyKCBjb3VudDonLCAocy5tYXRjaCgvbWFrZURyaXZlclwoL2cpIHx8IFtdKS5sZW5ndGgpOwo=" | base64 -d > /tmp/patchbuiltin.cjs
+          SRC="$SRC" node /tmp/patchbuiltin.cjs || exit 0
+          DEST="$GITHUB_WORKSPACE/app/src/main/assets/builtin-plugins/dsh-webcode-bridge"
+          mkdir -p "$DEST"
+          cp "$SRC/package.json" "$DEST/"
+          cp -r "$SRC/lib" "$DEST/lib"
+          [ -f "$SRC/cordis.patch.yml" ] && cp "$SRC/cordis.patch.yml" "$DEST/"
+          [ -d "$SRC/bin" ] && cp -r "$SRC/bin" "$DEST/bin"
+          echo "builtin bundled: $(ls "$DEST" | tr '\n' ' ')"
 
       - name: Build low debug APK
         run: |
