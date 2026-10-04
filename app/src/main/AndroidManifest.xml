@@ -57,6 +57,9 @@
         android:theme="@style/Theme.DeepseekHarness">
 
         <activity android:name=".ui.ModelSetupActivity" android:exported="false" />
+        <activity android:name=".ui.WebBridgeActivity" android:exported="false"
+        <activity android:name=".ui.ModelSetupActivity" android:exported="false" />
+        <activity android:name=".ui.WebBridgeActivity" android:exported="false"
         <activity android:name=".ui.CommunityActivity" android:exported="false" />
         <activity android:name=".ui.OnboardingPrepareActivity" android:exported="false" />
         <activity android:name=".ui.OnboardingReadyActivity" android:exported="false" />
