@@ -833,28 +833,25 @@ public final class HttpShellService {
             if (route.equals("/browser/eval")) {
                 String js = getParam(query, "js", "");
                 if (js.isEmpty()) return "[ERROR] missing js param";
-                com.deepseekharness.app.ui.WebBridgeActivity act =
-                        com.deepseekharness.app.ui.WebBridgeActivity.current();
-                if (act == null) return "[ERROR] WebBridgeActivity not started, call /browser/open first";
-                act.evalJs("eval-" + System.currentTimeMillis(), js);
+                if (!com.deepseekharness.app.ui.WebBridgeActivity.portConnected())
+                    return "[ERROR] page port not connected, call /browser/open first";
+                com.deepseekharness.app.ui.WebBridgeActivity.evalJs("eval-" + System.currentTimeMillis(), js);
                 return "{\"ok\":true,\"note\":\"result flows back via /browser/events\"}";
             }
             if (route.equals("/browser/send")) {
                 String text = getParam(query, "text", "");
                 if (text.isEmpty()) return "[ERROR] missing text param";
-                com.deepseekharness.app.ui.WebBridgeActivity act =
-                        com.deepseekharness.app.ui.WebBridgeActivity.current();
-                if (act == null) return "[ERROR] Activity not started, call /browser/open first";
-                act.postToPage("wb-send", new org.json.JSONObject()
+                if (!com.deepseekharness.app.ui.WebBridgeActivity.portConnected())
+                    return "[ERROR] page port not connected, call /browser/open first";
+                com.deepseekharness.app.ui.WebBridgeActivity.postToPage("wb-send", new org.json.JSONObject()
                         .put("id", "send-" + System.currentTimeMillis()).put("text", text));
                 return "{\"ok\":true}";
             }
             if (route.equals("/browser/click")) {
                 String what = getParam(query, "what", "send");
-                com.deepseekharness.app.ui.WebBridgeActivity act =
-                        com.deepseekharness.app.ui.WebBridgeActivity.current();
-                if (act == null) return "[ERROR] Activity not started";
-                act.postToPage("wb-click", new org.json.JSONObject()
+                if (!com.deepseekharness.app.ui.WebBridgeActivity.portConnected())
+                    return "[ERROR] page port not connected";
+                com.deepseekharness.app.ui.WebBridgeActivity.postToPage("wb-click", new org.json.JSONObject()
                         .put("id", "click-" + System.currentTimeMillis()).put("what", what));
                 return "{\"ok\":true}";
             }
