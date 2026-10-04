@@ -807,7 +807,84 @@ public final class HttpShellService {
         return t.length() > 24 ? t.substring(0, 24) + "…" : t;
     }
 
-    private String appUi(String path) {
+        /** /browser/* —— web bridge automation channel (WebBridgeActivity + webbridge extension). */
+    private String browserRoute(String path) {
+        String route = path.split("\\?", 2)[0];
+        String query = queryOf(path);
+        try {
+            if (route.equals("/browser/status")) {
+                com.deepseekharness.app.ui.WebBridgeActivity act =
+                        com.deepseekharness.app.ui.WebBridgeActivity.current();
+                Boolean lg = com.deepseekharness.app.ui.WebBridgeActivity.loginState();
+                return "{\"activity\":" + (act != null)
+                        + ",\"portConnected\":" + com.deepseekharness.app.ui.WebBridgeActivity.portConnected()
+                        + ",\"loggedIn\":" + (lg == null ? "null" : lg) + "}";
+            }
+            if (route.equals("/browser/open")) {
+                String url = getParam(query, "url", "");
+                if (url.isEmpty()) return "[ERROR] missing url param";
+                android.content.Intent i = new android.content.Intent(this,
+                        com.deepseekharness.app.ui.WebBridgeActivity.class);
+                i.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK);
+                i.putExtra("url", url);
+                startActivity(i);
+                return "{\"ok\":true,\"url\":" + org.json.JSONObject.quote(url) + "}";
+            }
+            if (route.equals("/browser/eval")) {
+                String js = getParam(query, "js", "");
+                if (js.isEmpty()) return "[ERROR] missing js param";
+                com.deepseekharness.app.ui.WebBridgeActivity act =
+                        com.deepseekharness.app.ui.WebBridgeActivity.current();
+                if (act == null) return "[ERROR] WebBridgeActivity not started, call /browser/open first";
+                act.evalJs("eval-" + System.currentTimeMillis(), js);
+                return "{\"ok\":true,\"note\":\"result flows back via /browser/events\"}";
+            }
+            if (route.equals("/browser/send")) {
+                String text = getParam(query, "text", "");
+                if (text.isEmpty()) return "[ERROR] missing text param";
+                com.deepseekharness.app.ui.WebBridgeActivity act =
+                        com.deepseekharness.app.ui.WebBridgeActivity.current();
+                if (act == null) return "[ERROR] Activity not started, call /browser/open first";
+                act.postToPage("wb-send", new org.json.JSONObject()
+                        .put("id", "send-" + System.currentTimeMillis()).put("text", text));
+                return "{\"ok\":true}";
+            }
+            if (route.equals("/browser/click")) {
+                String what = getParam(query, "what", "send");
+                com.deepseekharness.app.ui.WebBridgeActivity act =
+                        com.deepseekharness.app.ui.WebBridgeActivity.current();
+                if (act == null) return "[ERROR] Activity not started";
+                act.postToPage("wb-click", new org.json.JSONObject()
+                        .put("id", "click-" + System.currentTimeMillis()).put("what", what));
+                return "{\"ok\":true}";
+            }
+            if (route.equals("/browser/events")) {
+                long since = Long.parseLong(getParam(query, "since", "0"));
+                long wait = Long.parseLong(getParam(query, "wait", "20000"));
+                return com.deepseekharness.app.ui.WebBridgeActivity
+                        .takeEvents(since, Math.min(Math.max(wait, 0), 55000));
+            }
+            if (route.equals("/browser/login/show")) {
+                com.deepseekharness.app.ui.WebBridgeActivity.showLogin(this);
+                return "{\"ok\":true,\"mode\":\"login\"}";
+            }
+            if (route.equals("/browser/login/status")) {
+                Boolean st = com.deepseekharness.app.ui.WebBridgeActivity.loginState();
+                return "{\"loggedIn\":" + (st == null ? "null" : st) + "}";
+            }
+            if (route.equals("/browser/login/hide")) {
+                com.deepseekharness.app.ui.WebBridgeActivity act =
+                        com.deepseekharness.app.ui.WebBridgeActivity.current();
+                if (act == null) return "[ERROR] Activity not started";
+                act.hideToBack();
+                return "{\"ok\":true}";
+            }
+            return "[ERROR] unknown browser route: " + route;
+        } catch (Throwable e) {
+            return "[ERROR] " + route + ": " + e;
+        }
+    }
+private String appUi(String path) {
         String q = queryOf(path);
         // 命名空间内的子端点也走精确匹配：startsWith 会让 /app/ui/shotXXX
         // 命中截屏，而截屏会把当前画面留到磁盘。
