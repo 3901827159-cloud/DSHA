@@ -159,15 +159,21 @@ public class WebBridgeActivity extends Activity {
             primed = true;
         }
         final GeckoRuntime rt = GeckoRuntime.getDefault(ctx);
+        ensureOnce(rt, 0);
+    }
+
+    /** ensureBuiltIn 的回调在某些冷启动时序下不回落：每 5 秒重试一次（幂等），拿到 ext 即停。 */
+    private static void ensureOnce(final GeckoRuntime rt, final int attempt) {
+        if (runtimeExt != null || attempt >= 12) return;
         rt.getWebExtensionController()
                 .ensureBuiltIn("resource://android/assets/webbridge-integration/", "dsha-webbridge@dsh.client")
                 .accept(ext -> {
                     runtimeExt = ext;
                     runOnMain(() -> attachSessionDelegate(ext));
                 }, e -> {
-                    primed = false;
                     android.util.Log.w("DSHA", "webbridge extension register failed: " + e);
                 });
+        main.postDelayed(() -> ensureOnce(rt, attempt + 1), 5000);
     }
 
     /** 消息 delegate 只能挂在会话级控制器上（GV143 运行时级没有此方法）。 */
