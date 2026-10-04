@@ -164,14 +164,14 @@ public class WebBridgeActivity extends Activity {
                 }, "dsha");
     }
 
-    public void openUrl(String url) {
+    public static void openUrl(String url) {
         runOnMain(() -> {
             if (retained.session != null && retained.session.isOpen()) retained.session.loadUri(url);
         });
     }
 
     /** Post a command to the page Port (wb-send / wb-click / wb-eval / wb-check-login). */
-    public void postToPage(String type, org.json.JSONObject payload) {
+    public static void postToPage(String type, org.json.JSONObject payload) {
         runOnMain(() -> {
             WebExtension.Port p = retained.port;
             if (p == null) {
@@ -187,7 +187,7 @@ public class WebBridgeActivity extends Activity {
         });
     }
 
-    public void evalJs(String id, String js) {
+    public static void evalJs(String id, String js) {
         try {
             postToPage("wb-eval", new org.json.JSONObject().put("id", id).put("js", js));
         } catch (org.json.JSONException e) {
