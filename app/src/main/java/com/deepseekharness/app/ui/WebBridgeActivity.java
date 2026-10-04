@@ -119,14 +119,18 @@ public class WebBridgeActivity extends Activity {
         if (!retained.session.isOpen()) retained.session.open(runtime);
         view.setSession(retained.session);
 
+        // 冷启动竞态修复：先等扩展注册完成再加载页面，否则页面跑在注入之前，
+        // content script 缺席 → Port 永远不连 → 30s 超时（WEB_PAGE_NOT_READY）。
+        String url = getIntent() != null ? getIntent().getStringExtra("url") : null;
+        final String initialUrl = (url != null && !url.isEmpty()) ? url : null;
         runtime.getWebExtensionController()
                 .ensureBuiltIn("resource://android/assets/webbridge-integration/", "dsha-webbridge@dsh.client")
-                .accept(this::attachPort, e -> {
+                .accept(ext -> runOnMain(() -> {
+                    attachPort(ext);
+                    if (initialUrl != null && retained.session.isOpen()) retained.session.loadUri(initialUrl);
+                }), e -> {
                     android.util.Log.w("DSHA", "webbridge extension register failed: " + e);
                 });
-
-        String url = getIntent() != null ? getIntent().getStringExtra("url") : null;
-        if (url != null && !url.isEmpty()) retained.session.loadUri(url);
     }
 
     private void attachPort(WebExtension extension) {
@@ -147,9 +151,9 @@ public class WebBridgeActivity extends Activity {
                                                 loginMode = false;
                                                 runOnMain(() -> {
                                                     android.widget.Toast.makeText(WebBridgeActivity.this,
-                                                        "Login ok, moving to background",
+                                                        "Login ok, closing window",
                                                         android.widget.Toast.LENGTH_SHORT).show();
-                                                    moveTaskToBack(true);
+                                                    finish();
                                                 });
                                             }
                                         }
@@ -196,7 +200,7 @@ public class WebBridgeActivity extends Activity {
     }
 
     public void hideToBack() {
-        runOnMain(() -> moveTaskToBack(true));
+        runOnMain(() -> finish());
     }
 
     @Override protected void onDestroy() {
