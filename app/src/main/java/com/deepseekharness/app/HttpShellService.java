@@ -128,6 +128,8 @@ public final class HttpShellService {
         this.ctx = ctx.getApplicationContext();
         this.fixtureTokenFile = fixtureTokenFile;
         this.fixtureAskObserver = fixtureAskObserver;
+        // 前置依赖：桥一起就把 WebBridge 扩展注册进 Gecko 运行时（不等窗口打开）。
+        try { com.deepseekharness.app.ui.WebBridgeActivity.primeExtension(this.ctx); } catch (Throwable ignored) { }
     }
 
     public static HttpShellService instance() {
