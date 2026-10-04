@@ -123,7 +123,6 @@ public class WebBridgeActivity extends Activity {
                 .ensureBuiltIn("resource://android/assets/webbridge-integration/", "dsha-webbridge@dsh.client")
                 .accept(this::attachPort, e -> {
                     android.util.Log.w("DSHA", "webbridge extension register failed: " + e);
-                    return null;
                 });
 
         String url = getIntent() != null ? getIntent().getStringExtra("url") : null;
@@ -162,10 +161,7 @@ public class WebBridgeActivity extends Activity {
                             }
                         });
                     }
-                    @Override public void onMessage(String nativeApp, Object message) {
-                        android.util.Log.i("DSHA", "[webbridge-msg] " + message);
-                    }
-                });
+                }, "dsha");
     }
 
     public void openUrl(String url) {
