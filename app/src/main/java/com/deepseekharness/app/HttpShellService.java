@@ -823,11 +823,11 @@ public final class HttpShellService {
             if (route.equals("/browser/open")) {
                 String url = getParam(query, "url", "");
                 if (url.isEmpty()) return "[ERROR] missing url param";
-                android.content.Intent i = new android.content.Intent(this,
+                android.content.Intent i = new android.content.Intent(ctx,
                         com.deepseekharness.app.ui.WebBridgeActivity.class);
                 i.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK);
                 i.putExtra("url", url);
-                startActivity(i);
+                ctx.startActivity(i);
                 return "{\"ok\":true,\"url\":" + org.json.JSONObject.quote(url) + "}";
             }
             if (route.equals("/browser/eval")) {
@@ -865,7 +865,7 @@ public final class HttpShellService {
                         .takeEvents(since, Math.min(Math.max(wait, 0), 55000));
             }
             if (route.equals("/browser/login/show")) {
-                com.deepseekharness.app.ui.WebBridgeActivity.showLogin(this);
+                com.deepseekharness.app.ui.WebBridgeActivity.showLogin(ctx);
                 return "{\"ok\":true,\"mode\":\"login\"}";
             }
             if (route.equals("/browser/login/status")) {
