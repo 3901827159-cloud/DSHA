@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "name": "DSHA WebBridge automation",
-  "version": "0.1",
+  "version": "0.2",
   "browser_specific_settings": {
     "gecko": { "id": "dsha-webbridge@dsh.client" }
   },
@@ -11,6 +11,13 @@
     "geckoViewAddons"
   ],
   "content_scripts": [
+    {
+      "matches": ["https://chat.deepseek.com/*"],
+      "js": ["capture.js"],
+      "all_frames": false,
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
     {
       "matches": ["https://chat.deepseek.com/*"],
       "js": ["hook.js"],
