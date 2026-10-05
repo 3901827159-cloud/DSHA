@@ -116,6 +116,10 @@ public class WebBridgeActivity extends Activity {
 
         GeckoRuntime runtime = GeckoRuntime.getDefault(this);
         if (retained.session == null) retained.session = new GeckoSession();
+        // Ask the site for its desktop layout: the mobile variant serves a
+        // different composer/API shape than the desktop one we verified against.
+        retained.session.getSettings().setUserAgentMode(
+                org.mozilla.geckoview.GeckoSessionSettings.USER_AGENT_MODE_DESKTOP);
         if (!retained.session.isOpen()) retained.session.open(runtime);
         view.setSession(retained.session);
 
