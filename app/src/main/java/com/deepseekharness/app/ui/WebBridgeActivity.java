@@ -116,10 +116,14 @@ public class WebBridgeActivity extends Activity {
 
         GeckoRuntime runtime = GeckoRuntime.getDefault(this);
         if (retained.session == null) retained.session = new GeckoSession();
-        // Ask the site for its desktop layout: the mobile variant serves a
-        // different composer/API shape than the desktop one we verified against.
+        // Ask the site for its desktop layout the same way a browser's
+        // "desktop site" toggle does: UA identity AND viewport sizing. UA alone
+        // is not enough - responsive breakpoints still see a phone-wide
+        // viewport and the site keeps serving its mobile variant.
         retained.session.getSettings().setUserAgentMode(
                 org.mozilla.geckoview.GeckoSessionSettings.USER_AGENT_MODE_DESKTOP);
+        retained.session.getSettings().setViewportMode(
+                org.mozilla.geckoview.GeckoSessionSettings.VIEWPORT_MODE_DESKTOP);
         if (!retained.session.isOpen()) retained.session.open(runtime);
         view.setSession(retained.session);
 
